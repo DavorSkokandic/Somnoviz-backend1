@@ -1,7 +1,8 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
-import { handleFileUpload } from "../controllers/uploadController";
+import {handleFileUpload} from "../controllers/uploadController";
+import {handleEdfChunk} from "../controllers/uploadController";
 
 const router = express.Router();
 
@@ -18,6 +19,12 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-router.post("/", upload.single("file"), handleFileUpload);
+router.post("/",upload.single("file"),(req, res, next) => {
+    Promise.resolve(handleFileUpload(req, res)).catch(next);
+  }
+);
+router.get('/edf-chunk', (req, res, next) => {
+  Promise.resolve(handleEdfChunk(req, res)).catch(next);
+});
 
 export default router;

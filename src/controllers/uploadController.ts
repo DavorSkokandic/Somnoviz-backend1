@@ -1,42 +1,100 @@
+// src/controllers/uploadController.ts
+
 import { Request, Response } from "express";
+import { spawn } from "child_process";
 import path from "path";
-import { execFile } from "child_process";
 import fs from "fs";
 
-export const handleFileUpload = async (
-  req: Request,
-  res: Response
-): Promise<void> => {
-  const file = req.file;
+export const handleFileUpload = async (req: Request, res: Response) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded." });
 
-  if (!file) {
-    res.status(400).json({ error: "No file uploaded." });
-    return;
-  }
+    const filePath = path.resolve(file.path);
+    const pythonScriptPath = path.resolve("src/scripts/parseEdF.py");
+    const python = spawn("python", [pythonScriptPath, "info", filePath]);
 
-  const filePath = path.resolve(file.path);
-  const pythonScriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+    let output = "";
+    let errorOutput = "";
 
-  execFile("python", [pythonScriptPath, filePath], (error, stdout, stderr) => {
-    fs.unlink(filePath, (err) => {
-      if (err) console.error("Failed to delete uploaded file:", err);
+    python.stdout.on("data", (data) => {
+      output += data.toString();
     });
 
-    if (error) {
-      console.error("Python error:", error, stderr);
-      return res.status(500).json({ error: "Failed to parse EDF file." });
-    }
+    python.stderr.on("data", (data) => {
+      const err = data.toString();
+      errorOutput += err;
+      console.error("[PYTHON STDERR]", err);
+    });
 
-    try {
-      const data = JSON.parse(stdout);
-      if (data.error) {
-        console.error("Python skripta vratila grešku:", data.error);
-        return res.status(500).json({ error: data.error });
+    python.on("close", (code) => {
+      if (code === 0) {
+        const parsed = JSON.parse(output);
+
+        const response = {
+          channels: parsed.signalLabels,
+          sampleRates: parsed.frequencies,
+          duration: parsed.duration,
+          startTime: parsed.startTime,
+          previewData: {},
+          diagnostics: {},
+          patientInfo: parsed.patientInfo || "Nepoznat pacijent",
+          recordingInfo: parsed.recordingInfo || "Nepoznata snimka",
+          tempFilePath: filePath,
+          originalFileName: file.originalname,
+        };
+
+        res.json(response);
+      } else {
+        console.error("Python error:", errorOutput);
+        res.status(500).json({ error: "Greška pri obradi fajla.", details: errorOutput });
       }
-      res.json(data);
-    } catch (parseError) {
-      console.error("JSON parse error:", parseError, stdout);
-      res.status(500).json({ error: "Invalid response from parser." });
+    });
+  } catch (error) {
+    console.error("Server error:", error);
+    res.status(500).json({ error: "Internal server error." });
+  }
+};
+export const handleEdfChunk = async (req: Request, res: Response) => {
+  const { filePath, channel, start_sample, num_samples } = req.query;
+
+  if (!filePath || !channel || !start_sample || !num_samples) {
+    return res.status(400).json({ error: "Nedostaju parametri." });
+  }
+
+  const decodedPath = decodeURIComponent(filePath as string);
+  if (!fs.existsSync(decodedPath)) {
+    return res.status(404).json({ error: "Fajl ne postoji." });
+  }
+
+  const pythonScriptPath = path.resolve("src/scripts/parseEdF.py");
+  const args = [pythonScriptPath, "chunk", decodedPath, channel as string, start_sample as string, num_samples as string];
+
+  console.log("Executing Python chunk script with:", args.join(" "));
+
+  const python = spawn("python", args);
+
+  let output = "";
+  let errorOutput = "";
+
+  python.stdout.on("data", (data) => {
+    output += data.toString();
+  });
+
+  python.stderr.on("data", (data) => {
+    const err = data.toString();
+    errorOutput += err;
+    console.error("[PYTHON STDERR]", err);
+  });
+
+  python.on("close", (code) => {
+    if (code === 0) {
+      const parsed = JSON.parse(output);
+      res.json(parsed);
+    } else {
+      console.error("Python error:", errorOutput);
+      res.status(500).json({ error: "Greška pri dohvaćanju chunka.", details: errorOutput });
     }
   });
 };
+
