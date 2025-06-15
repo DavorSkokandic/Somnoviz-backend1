@@ -8,6 +8,17 @@ def error_response(message):
     print(json.dumps({"error": message}))
     sys.exit(1)
 
+def downsample_minmax(data, target_points):
+    if len(data) <= target_points:
+        return data
+    factor = len(data) // target_points
+    downsampled = []
+    for i in range(0, len(data), factor):
+        segment = data[i:i+factor]
+        downsampled.append(float(np.min(segment)))
+        downsampled.append(float(np.max(segment)))
+    return downsampled[:target_points]
+
 def get_edf_info(file_path):
     print(f"[DEBUG] Provjera postoji li fajl: {file_path}", file=sys.stderr)
     if not os.path.exists(file_path):
@@ -47,7 +58,7 @@ def get_edf_info(file_path):
         traceback.print_exc(file=sys.stderr)
         error_response(str(e))
 
-def get_chunk(file_path, channel, start_sample, num_samples):
+def get_chunk(file_path, channel, start_sample, num_samples, max_points=None):
     print(f"[DEBUG] Provjera postoji li fajl za chunk: {file_path}", file=sys.stderr)
     if not os.path.exists(file_path):
         error_response(f"File not found: {file_path}")
@@ -73,14 +84,23 @@ def get_chunk(file_path, channel, start_sample, num_samples):
             if start < 0 or end > signal_length:
                 error_response(f"Invalid sample range: start={start}, end={end}, signal length={signal_length}")
 
-            chunk_data = signal[start:end].tolist()
+            chunk_data = signal[start:end]
             print(f"[DEBUG] Veličina chunk podataka: {len(chunk_data)}", file=sys.stderr)
+
+            # Downsampling
+            if max_points is not None and len(chunk_data) > max_points:
+                chunk_data = downsample_minmax(chunk_data, max_points)
+                print(f"[DEBUG] Downsampled na {len(chunk_data)} točaka.", file=sys.stderr)
+            else:
+                chunk_data = chunk_data.tolist()
+
             return {"data": chunk_data}
 
     except Exception as e:
         print("[ERROR] Exception prilikom dohvaćanja chunk podataka:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         error_response(str(e))
+
 
 if __name__ == "__main__":
     print(f"[DEBUG] Primljeni argumenti: {sys.argv}", file=sys.stderr)
@@ -99,11 +119,12 @@ if __name__ == "__main__":
         print(json.dumps(result))
     elif command == "chunk":
         if len(sys.argv) < 6:
-            error_response("Missing arguments for chunk. Usage: parseEdF.py chunk <file_path> <channel> <start_sample> <num_samples>")
+            error_response("Missing arguments for chunk. Usage: parseEdF.py chunk <file_path> <channel> <start_sample> <num_samples> [max_points]")
         channel = sys.argv[3]
         start_sample = sys.argv[4]
         num_samples = sys.argv[5]
-        result = get_chunk(file_path, channel, start_sample, num_samples)
+        max_points = int(sys.argv[6]) if len(sys.argv) > 6 else None
+        result = get_chunk(file_path, channel, start_sample, num_samples, max_points)
         print(json.dumps(result))
     else:
         error_response(f"Unknown command: {command}. Use 'info' or 'chunk'.")
