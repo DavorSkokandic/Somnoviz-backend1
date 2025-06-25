@@ -98,3 +98,45 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
   });
 };
 
+export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channel, start_sample, num_samples, target_points } = req.query;
+
+    if (!filePath || !channel || !start_sample || !num_samples || !target_points) {
+      return res.status(400).json({ error: "Missing required query parameters." });
+    }
+
+    const scriptPath = path.resolve('src/scripts/parseEdF.py');
+    const python = spawn('python', [
+      scriptPath,
+      'chunk-downsample',
+      String(filePath),
+      String(channel),
+      String(start_sample),
+      String(num_samples),
+      String(target_points),
+    ]);
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => (output += data.toString()));
+    python.stderr.on('data', (data) => (errorOutput += data.toString()));
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          res.json(JSON.parse(output));
+        } catch (e) {
+          res.status(500).json({ error: "Failed to parse Python response." });
+        }
+      } else {
+        console.error("Python error:", errorOutput);
+        res.status(500).json({ error: "Failed to parse chunk", details: errorOutput });
+      }
+    });
+  } catch (err) {
+    console.error("Controller error:", err);
+    res.status(500).json({ error: "Internal server error." });
+  }
+};

@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "path";
 import {handleFileUpload} from "../controllers/uploadController";
 import {handleEdfChunk} from "../controllers/uploadController";
+import {handleEdfChunkDownsample} from "../controllers/uploadController";
 
 const router = express.Router();
 
@@ -26,5 +27,10 @@ router.post("/",upload.single("file"),(req, res, next) => {
 router.get('/edf-chunk', (req, res, next) => {
   Promise.resolve(handleEdfChunk(req, res)).catch(next);
 });
+
+router.get('/edf-chunk-downsample', (req, res, next) => {
+  Promise.resolve(handleEdfChunkDownsample(req, res)).catch(next);
+  }
+);
 
 export default router;
