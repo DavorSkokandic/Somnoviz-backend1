@@ -4,6 +4,7 @@ import path from "path";
 import {handleFileUpload} from "../controllers/uploadController";
 import {handleEdfChunk} from "../controllers/uploadController";
 import {handleEdfChunkDownsample} from "../controllers/uploadController";
+import { handleEdfMultiChunk } from "../controllers/uploadController";
 
 const router = express.Router();
 
@@ -32,5 +33,8 @@ router.get('/edf-chunk-downsample', (req, res, next) => {
   Promise.resolve(handleEdfChunkDownsample(req, res)).catch(next);
   }
 );
-
+router.get('/edf-multi-chunk', (req, res, next) => {
+  Promise.resolve(handleEdfMultiChunk(req, res)).catch(next);
+}
+);
 export default router;

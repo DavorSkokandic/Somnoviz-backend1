@@ -4,6 +4,7 @@ import os
 import traceback
 from pyedflib import EdfReader
 import numpy as np
+from mne.io import read_raw_edf
 
 def error_response(message):
     print(json.dumps({"error": message}))
@@ -102,6 +103,35 @@ def get_chunk(file_path, channel, start_sample, num_samples, max_points=None):
         traceback.print_exc(file=sys.stderr)
         error_response(str(e))
 
+def get_multi_channel_chunk(file_path, channels, start_sample, end_sample, max_points):
+    import numpy as np
+    from mne.io import read_raw_edf
+
+    raw = read_raw_edf(file_path, preload=True, verbose=False)
+    available_channels = raw.ch_names
+    start_sample = int(start_sample)
+    end_sample = int(end_sample)
+    max_points = int(max_points)
+
+    response = {"labels": [], "channels": {}}
+    times = raw.times[start_sample:end_sample]
+    if len(times) > max_points:
+        step = len(times) // max_points
+        times = times[::step]
+    response["labels"] = (times * 1000 + raw.info['meas_date'].timestamp() * 1000).tolist()
+
+    for ch in channels:
+        if ch not in available_channels:
+            continue
+        ch_idx = available_channels.index(ch)
+        signal, _ = raw[ch_idx, start_sample:end_sample]
+        signal = signal.flatten()
+        if len(signal) > max_points:
+            step = len(signal) // max_points
+            signal = signal[::step]
+        response["channels"][ch] = signal.tolist()
+    print("[DEBUG] Multi-channel chunk loaded.")
+    return response
 
 if __name__ == "__main__":
     print(f"[DEBUG] Primljeni argumenti: {sys.argv}", file=sys.stderr)
@@ -183,5 +213,14 @@ elif command == "chunk-downsample":
     except Exception as e:
         print(f"[ERROR] Exception in 'chunk-downsample': {e}", file=sys.stderr)
         sys.exit(1)
+        
+elif command == "multi-chunk-downsample":
+    file_path = sys.argv[2]
+    channel_list = json.loads(sys.argv[3])  # expects '["Ch1", "Ch2"]'
+    start_sample = int(float(sys.argv[4]))
+    end_sample = int(float(sys.argv[5]))
+    max_points = int(float(sys.argv[6]))
+    result = get_multi_channel_chunk(file_path, channel_list, start_sample, end_sample, max_points)
+    print(json.dumps(result))
 else:
     error_response(f"Unknown command: {command}. Use 'info', 'chunk', or 'chunk-downsample'.")

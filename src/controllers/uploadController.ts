@@ -140,3 +140,57 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Internal server error." });
   }
 };
+
+export const handleEdfMultiChunk = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channels, start_sample, end_sample, max_points } = req.query;
+
+    if (!filePath || !channels || !start_sample || !end_sample || !max_points) {
+      return res.status(400).json({ error: 'Missing required query parameters.' });
+    }
+
+    const decodedFilePath = decodeURIComponent(filePath as string);
+    const parsedChannels = JSON.parse(channels as string);
+
+    const args = [
+      'multi-chunk-downsample',
+      decodedFilePath,
+      JSON.stringify(parsedChannels),
+      start_sample as string,
+      end_sample as string,
+      max_points as string,
+    ];
+
+    const pythonProcess = spawn('python', ['src/scripts/parseEdF.py', ...args]);
+
+    let result = '';
+    let errorOutput = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      result += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const parsed = JSON.parse(result);
+          res.json(parsed);
+        } catch (err) {
+          console.error('[ERROR] JSON parse failed:', err);
+          console.error('[PYTHON STDOUT]', result);
+          res.status(500).json({ error: 'Failed to parse response from Python script.' });
+        }
+      } else {
+        console.error('[PYTHON STDERR]', errorOutput);
+        res.status(500).json({ error: 'Python script failed.', details: errorOutput });
+      }
+    });
+  } catch (err) {
+    console.error('[ERROR] Unexpected server error:', err);
+    res.status(500).json({ error: 'Unexpected error occurred.' });
+  }
+};
