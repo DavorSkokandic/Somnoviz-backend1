@@ -45,11 +45,17 @@ def get_edf_info(file_path):
             print(f"[DEBUG] Patient info: {patient_info}", file=sys.stderr)
             print(f"[DEBUG] Recording info: {recording_info}", file=sys.stderr)
 
+            # Get number of samples for each channel (convert to regular int for JSON serialization)
+            num_samples = [int(f.getNSamples()[i]) for i in range(signal_count)]
+            
+            print(f"[DEBUG] Number of samples: {num_samples}", file=sys.stderr)
+
             return {
                 "signalLabels": signal_labels,
                 "signalCount": signal_count,
                 "duration": duration,
                 "frequencies": frequencies,
+                "numSamples": num_samples,  # Added missing field
                 "startTime": start_time,
                 "patientInfo": patient_info,
                 "recordingInfo": recording_info

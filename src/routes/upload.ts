@@ -5,6 +5,7 @@ import {handleFileUpload} from "../controllers/uploadController";
 import {handleEdfChunk} from "../controllers/uploadController";
 import {handleEdfChunkDownsample} from "../controllers/uploadController";
 import { handleEdfMultiChunk } from "../controllers/uploadController";
+import { handleAHIAnalysis } from "../controllers/uploadController";
 
 const router = express.Router();
 
@@ -37,4 +38,10 @@ router.get('/edf-multi-chunk', (req, res, next) => {
   Promise.resolve(handleEdfMultiChunk(req, res)).catch(next);
 }
 );
+
+// AHI Analysis endpoint - POST because we need to send channel names in body
+router.post('/ahi-analysis', (req, res, next) => {
+  Promise.resolve(handleAHIAnalysis(req, res)).catch(next);
+});
+
 export default router;
