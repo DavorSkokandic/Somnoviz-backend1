@@ -501,3 +501,66 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
     }
   });
 };
+
+// Handler for finding max/min values from raw data
+export const handleMaxMinValues = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channels, startSec = 0, endSec } = req.body;
+    
+    if (!filePath || !channels || !Array.isArray(channels)) {
+      return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
+    }
+
+    console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
+
+    const scriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+    
+    // Prepare command arguments
+    const args = [
+      scriptPath,
+      'max-min',
+      filePath,
+      JSON.stringify(channels),
+      startSec.toString()
+    ];
+    
+    if (endSec !== undefined) {
+      args.push(endSec.toString());
+    }
+
+    console.log('[DEBUG] Running max-min command:', args);
+
+    const python = spawn('python', args);
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.log('[DEBUG] Python stderr:', data.toString());
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        console.error('[ERROR] Max-min analysis failed:', errorOutput);
+        return res.status(500).json({ error: `Max-min analysis failed: ${errorOutput}` });
+      }
+
+      try {
+        const results = JSON.parse(output);
+        console.log('[DEBUG] Max-min results:', results);
+        res.json({ success: true, data: results });
+      } catch (parseError) {
+        console.error('[ERROR] Failed to parse max-min results:', parseError);
+        res.status(500).json({ error: 'Failed to parse max-min results' });
+      }
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Max-min analysis error:', error);
+    res.status(500).json({ error: 'Max-min analysis failed' });
+  }
+};

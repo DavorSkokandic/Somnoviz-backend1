@@ -20,6 +20,85 @@ def downsample_stride(data, target_points):
     sliced = data[::step]
     return sliced.tolist() if isinstance(sliced, np.ndarray) else list(sliced)
 
+def find_max_min_values(file_path, channels, start_sec=0, end_sec=None):
+    """Find true max/min values from raw data for specified channels and time range."""
+    print(f"[DEBUG] Finding max/min values for channels: {channels}", file=sys.stderr)
+    print(f"[DEBUG] Time range: {start_sec}s to {end_sec}s", file=sys.stderr)
+    
+    if not os.path.exists(file_path):
+        error_response(f"File not found: {file_path}")
+    
+    try:
+        with EdfReader(file_path) as f:
+            signal_labels = f.getSignalLabels()
+            signal_count = f.signals_in_file
+            duration = f.getFileDuration()
+            frequencies = [f.getSampleFrequency(i) for i in range(signal_count)]
+            
+            # If end_sec not specified, use full duration
+            if end_sec is None:
+                end_sec = duration
+            
+            # Bound the time range
+            start_sec = max(0, start_sec)
+            end_sec = min(duration, end_sec)
+            
+            results = {}
+            
+            for channel in channels:
+                if channel not in signal_labels:
+                    print(f"[WARNING] Channel '{channel}' not found in file", file=sys.stderr)
+                    continue
+                
+                channel_index = signal_labels.index(channel)
+                sample_rate = frequencies[channel_index]
+                
+                # Calculate sample range
+                start_sample = int(start_sec * sample_rate)
+                end_sample = int(end_sec * sample_rate)
+                
+                print(f"[DEBUG] Channel '{channel}': {start_sample} to {end_sample} samples (rate: {sample_rate}Hz)", file=sys.stderr)
+                
+                # Read raw data for the time range
+                raw_data = f.readSignal(channel_index, start_sample, end_sample - start_sample)
+                
+                if len(raw_data) == 0:
+                    print(f"[WARNING] No data found for channel '{channel}' in time range", file=sys.stderr)
+                    continue
+                
+                # Find max and min values with their indices
+                max_value = float(np.max(raw_data))
+                min_value = float(np.min(raw_data))
+                max_index = int(np.argmax(raw_data))
+                min_index = int(np.argmin(raw_data))
+                
+                # Convert indices back to time
+                max_time = start_sec + (max_index / sample_rate)
+                min_time = start_sec + (min_index / sample_rate)
+                
+                results[channel] = {
+                    'max': {
+                        'value': max_value,
+                        'time': max_time,
+                        'sample_index': max_index
+                    },
+                    'min': {
+                        'value': min_value,
+                        'time': min_time,
+                        'sample_index': min_index
+                    },
+                    'sample_rate': sample_rate,
+                    'data_points': len(raw_data)
+                }
+                
+                print(f"[DEBUG] Channel '{channel}' - Max: {max_value:.2f} at {max_time:.1f}s, Min: {min_value:.2f} at {min_time:.1f}s", file=sys.stderr)
+            
+            return results
+            
+    except Exception as e:
+        error_response(f"Error finding max/min values: {str(e)}")
+        traceback.print_exc()
+
 def get_edf_info(file_path):
     print(f"[DEBUG] Provjera postoji li fajl: {file_path}", file=sys.stderr)
     if not os.path.exists(file_path):
@@ -295,5 +374,21 @@ elif command == "multi-chunk-downsample":
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
+elif command == "max-min":
+    try:
+        file_path = sys.argv[2]
+        channel_list = json.loads(sys.argv[3])  # expects '["Ch1", "Ch2"]'
+        start_sec = float(sys.argv[4]) if len(sys.argv) > 4 else 0
+        end_sec = float(sys.argv[5]) if len(sys.argv) > 5 else None
+        
+        print(f"[DEBUG] Max-min command parsed: {len(channel_list)} channels, {start_sec}-{end_sec} sec", file=sys.stderr)
+        
+        result = find_max_min_values(file_path, channel_list, start_sec, end_sec)
+        print(json.dumps(result))
+    except Exception as e:
+        print(f"[ERROR] Exception in 'max-min': {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
 else:
-    error_response(f"Unknown command: {command}. Use 'info', 'chunk', or 'chunk-downsample'.")
+    error_response(f"Unknown command: {command}. Use 'info', 'chunk', 'chunk-downsample', 'multi-chunk-downsample', or 'max-min'.")
