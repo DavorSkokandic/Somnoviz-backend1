@@ -221,6 +221,7 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] Multi-chunk request received:', req.query);
     
+
     // Accept time in seconds for robust, channel-agnostic requests
     const { filePath, channels, start_sec, end_sec, max_points } = req.query;
 
@@ -294,5 +295,272 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[ERROR] Unexpected server error:', err);
     res.status(500).json({ error: 'Unexpected error occurred.' });
+  }
+};
+
+export const handleAHIAnalysis = async (req: Request, res: Response) => {
+  try {
+    console.log('[DEBUG] AHI analysis request received:', req.body);
+    
+    const { filePath, flowChannel, spo2Channel } = req.body;
+
+    // Validate required parameters
+    if (!filePath || !flowChannel || !spo2Channel) {
+      console.log('[ERROR] Missing required parameters for AHI analysis');
+      return res.status(400).json({ 
+        error: 'Missing required parameters: filePath, flowChannel, spo2Channel' 
+      });
+    }
+
+    const decodedFilePath = decodeURIComponent(filePath);
+    
+    // Check if file exists
+    if (!fs.existsSync(decodedFilePath)) {
+      console.log('[ERROR] EDF file not found:', decodedFilePath);
+      return res.status(404).json({ error: 'EDF file not found' });
+    }
+
+    console.log('[DEBUG] Starting AHI analysis for:', {
+      filePath: decodedFilePath,
+      flowChannel,
+      spo2Channel
+    });
+
+    // First, get the full data for both channels using existing parseEdf.py
+    const parseEdfScript = path.resolve(__dirname, "../scripts/parseEdf.py");
+    
+    // Get flow channel data
+    console.log('[DEBUG] Fetching flow channel data...');
+    const flowData = await getChannelData(parseEdfScript, decodedFilePath, flowChannel);
+    
+    // Get SpO2 channel data  
+    console.log('[DEBUG] Fetching SpO2 channel data...');
+    const spo2Data = await getChannelData(parseEdfScript, decodedFilePath, spo2Channel);
+
+    // Prepare data for AHI analysis
+    const analysisInput = {
+      flow_data: flowData.data,
+      spo2_data: spo2Data.data,
+      flow_sample_rate: flowData.sampleRate,
+      spo2_sample_rate: spo2Data.sampleRate
+    };
+
+    console.log('[DEBUG] Running AHI analysis algorithm...');
+    
+    // Run AHI analysis
+    const ahiScript = path.resolve(__dirname, "../scripts/ahi_analysis.py");
+    const analysisResults = await runAHIAnalysis(ahiScript, analysisInput);
+
+    console.log('[DEBUG] AHI analysis completed successfully');
+    
+    // Return results
+    res.json({
+      success: true,
+      ...analysisResults
+    });
+
+  } catch (error) {
+    console.error("[ERROR] AHI analysis failed:", error);
+    res.status(500).json({ 
+      error: "AHI analysis failed", 
+      details: error instanceof Error ? error.message : String(error)
+    });
+  }
+};
+
+// Helper function to get channel data
+async function getChannelData(scriptPath: string, filePath: string, channel: string): Promise<{data: number[], sampleRate: number}> {
+  return new Promise((resolve, reject) => {
+    // Get channel info first
+    const infoProcess = spawn('python', [scriptPath, 'info', filePath]);
+    let infoOutput = '';
+    let errorOutput = '';
+
+    infoProcess.stdout.on('data', (data) => {
+      infoOutput += data.toString();
+    });
+
+    infoProcess.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    infoProcess.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Failed to get file info: ${errorOutput}`));
+        return;
+      }
+
+      try {
+        const fileInfo = JSON.parse(infoOutput);
+        const channelIndex = fileInfo.signalLabels.indexOf(channel);
+        
+        if (channelIndex === -1) {
+          reject(new Error(`Channel '${channel}' not found in EDF file`));
+          return;
+        }
+
+        const sampleRate = fileInfo.frequencies[channelIndex];
+        const totalSamples = fileInfo.numSamples[channelIndex];
+
+        // Get downsampled channel data for AHI analysis (use reasonable target points)
+        // For AHI, we need ~1-2 Hz resolution (events are >10s long), so 10000-20000 points is sufficient
+        const targetPoints = Math.min(20000, Math.floor(totalSamples / 10)); // Downsample but keep reasonable resolution
+        
+        console.log(`[DEBUG] Getting channel data: ${channel}, totalSamples: ${totalSamples}, targetPoints: ${targetPoints}`);
+        
+        const dataProcess = spawn('python', [scriptPath, 'chunk-downsample', filePath, channel, '0', totalSamples.toString(), targetPoints.toString()]);
+        let dataOutput = '';
+        let dataError = '';
+
+        dataProcess.stdout.on('data', (data) => {
+          dataOutput += data.toString();
+        });
+
+        dataProcess.stderr.on('data', (data) => {
+          dataError += data.toString();
+          console.log('[DEBUG] Python stderr:', data.toString());
+        });
+
+        dataProcess.on('close', (code) => {
+          if (code !== 0) {
+            reject(new Error(`Failed to get channel data: ${dataError}`));
+            return;
+          }
+
+          try {
+            const channelData = JSON.parse(dataOutput);
+            // Calculate effective sample rate after downsampling
+            const effectiveSampleRate = channelData.data.length / (totalSamples / sampleRate);
+            
+            console.log(`[DEBUG] Channel data retrieved: ${channelData.data.length} points, effective rate: ${effectiveSampleRate.toFixed(2)} Hz`);
+            
+            resolve({
+              data: channelData.data,
+              sampleRate: effectiveSampleRate // Use effective sample rate for AHI analysis
+            });
+          } catch (parseError) {
+            reject(new Error(`Failed to parse channel data: ${parseError}`));
+          }
+        });
+      } catch (parseError) {
+        reject(new Error(`Failed to parse file info: ${parseError}`));
+      }
+    });
+  });
+}
+
+// Helper function to run AHI analysis
+async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    // Create a temporary file to pass JSON data (avoids PowerShell JSON escaping issues)
+    const tempFile = path.join(__dirname, `temp_ahi_input_${Date.now()}.json`);
+    
+    try {
+      // Write input data to temporary file
+      fs.writeFileSync(tempFile, JSON.stringify(inputData));
+      console.log('[DEBUG] Created temp file:', tempFile);
+      
+      // Modified AHI script to read from file instead of command line
+      const analysisProcess = spawn('python', [scriptPath, tempFile]);
+      let output = '';
+      let errorOutput = '';
+
+      analysisProcess.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      analysisProcess.stderr.on('data', (data) => {
+        const err = data.toString();
+        errorOutput += err;
+        console.log('[AHI STDERR]', err); // Log for debugging
+      });
+
+      analysisProcess.on('close', (code) => {
+        // Clean up temp file
+        try {
+          fs.unlinkSync(tempFile);
+          console.log('[DEBUG] Cleaned up temp file:', tempFile);
+        } catch (cleanupError) {
+          console.warn('[WARN] Failed to clean up temp file:', cleanupError);
+        }
+
+        if (code !== 0) {
+          reject(new Error(`AHI analysis failed: ${errorOutput}`));
+          return;
+        }
+
+        try {
+          const results = JSON.parse(output);
+          resolve(results);
+        } catch (parseError) {
+          reject(new Error(`Failed to parse AHI results: ${parseError}`));
+        }
+      });
+    } catch (fileError) {
+      reject(new Error(`Failed to create temp file: ${fileError}`));
+    }
+  });
+};
+
+// Handler for finding max/min values from raw data
+export const handleMaxMinValues = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channels, startSec = 0, endSec } = req.body;
+    
+    if (!filePath || !channels || !Array.isArray(channels)) {
+      return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
+    }
+
+    console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
+
+    const scriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+    
+    // Prepare command arguments
+    const args = [
+      scriptPath,
+      'max-min',
+      filePath,
+      JSON.stringify(channels),
+      startSec.toString()
+    ];
+    
+    if (endSec !== undefined) {
+      args.push(endSec.toString());
+    }
+
+    console.log('[DEBUG] Running max-min command:', args);
+
+    const python = spawn('python', args);
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+      console.log('[DEBUG] Python stderr:', data.toString());
+    });
+
+    python.on('close', (code) => {
+      if (code !== 0) {
+        console.error('[ERROR] Max-min analysis failed:', errorOutput);
+        return res.status(500).json({ error: `Max-min analysis failed: ${errorOutput}` });
+      }
+
+      try {
+        const results = JSON.parse(output);
+        console.log('[DEBUG] Max-min results:', results);
+        res.json({ success: true, data: results });
+      } catch (parseError) {
+        console.error('[ERROR] Failed to parse max-min results:', parseError);
+        res.status(500).json({ error: 'Failed to parse max-min results' });
+      }
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Max-min analysis error:', error);
+    res.status(500).json({ error: 'Max-min analysis failed' });
   }
 };
