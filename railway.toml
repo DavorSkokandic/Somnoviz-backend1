@@ -1,0 +1,13 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "npm start"
+
+[build.env]
+NODE_ENV = "production"
+
+[variables]
+NODE_ENV = "production"
+FILE_MAX_AGE_HOURS = "72"
+AUTO_CLEANUP_ENABLED = "true"
