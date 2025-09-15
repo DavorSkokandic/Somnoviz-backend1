@@ -1,2 +1,5 @@
-uploads/
+# Ignore uploaded files but keep the uploads directory
+uploads/*
+!uploads/.gitkeep
+
 node_modules/
