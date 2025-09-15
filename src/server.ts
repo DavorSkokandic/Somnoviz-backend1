@@ -14,9 +14,14 @@ const PORT = process.env.PORT || 5000;
 // Configure CORS for development and production
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? true // Allow all origins in production (or specify your domain)
+    ? [
+        'https://somnoviz.netlify.app',
+        'https://main--somnoviz.netlify.app', 
+        /https:\/\/.*--somnoviz\.netlify\.app$/,
+        /https:\/\/.*\.netlify\.app$/
+      ] // Production origins - your Netlify URL
     : ["http://localhost:5173", "http://localhost:3000"], // Development origins
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true,
   optionsSuccessStatus: 200 // For legacy browser support
 };
