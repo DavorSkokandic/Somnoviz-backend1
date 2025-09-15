@@ -7,9 +7,35 @@ import fs from "fs";
 
 // Helper function to get correct script paths in both development and production
 const getScriptPath = (scriptName: string): string => {
-  return process.env.NODE_ENV === 'production'
-    ? path.resolve(process.cwd(), `src/scripts/${scriptName}`)
-    : path.resolve(__dirname, `../scripts/${scriptName}`);
+  // List of possible paths to check (in order of preference)
+  const possiblePaths = [
+    // Development: TypeScript source
+    path.resolve(__dirname, `../scripts/${scriptName}`),
+    // Development: if running from compiled dist
+    path.resolve(__dirname, `../../src/scripts/${scriptName}`),
+    // Production: Railway deployment
+    path.resolve(process.cwd(), `src/scripts/${scriptName}`),
+    // Alternative production path
+    path.resolve(process.cwd(), `dist/scripts/${scriptName}`),
+    // Fallback: relative to project root
+    path.resolve(process.cwd(), `scripts/${scriptName}`)
+  ];
+
+  // Try each path and return the first one that exists
+  for (const scriptPath of possiblePaths) {
+    if (fs.existsSync(scriptPath)) {
+      console.log(`[DEBUG] Found script at: ${scriptPath}`);
+      return scriptPath;
+    }
+  }
+
+  // If none found, log all attempted paths and return the first one
+  console.error(`[ERROR] Script '${scriptName}' not found in any of these locations:`);
+  possiblePaths.forEach((p, i) => {
+    console.error(`  ${i + 1}. ${p} (exists: ${fs.existsSync(p)})`);
+  });
+  
+  return possiblePaths[0]; // Return first path as fallback
 };
 
 export const handleFileUpload = async (req: Request, res: Response) => {
@@ -71,8 +97,27 @@ export const handleFileUpload = async (req: Request, res: Response) => {
           res.status(500).json({ error: "Failed to parse Python script output", details: output });
         }
       } else {
-        console.error("Python error:", errorOutput);
-        res.status(500).json({ error: "Greška pri obradi fajla.", details: errorOutput });
+        console.error("[ERROR] Python process failed with code:", code);
+        console.error("[ERROR] Python error output:", errorOutput);
+        console.error("[ERROR] Python stdout:", output);
+        
+        // More detailed error message
+        let errorMessage = "Failed to process EDF file";
+        if (errorOutput.includes("No such file or directory")) {
+          errorMessage = "Python script not found. Please check server configuration.";
+        } else if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
+          errorMessage = "Required Python modules are missing. Please check server dependencies.";
+        } else if (errorOutput.trim()) {
+          errorMessage = `Python processing error: ${errorOutput.trim()}`;
+        }
+        
+        res.status(500).json({ 
+          error: errorMessage,
+          details: errorOutput,
+          code: code,
+          pythonScriptPath: pythonScriptPath,
+          scriptExists: fs.existsSync(pythonScriptPath)
+        });
       }
     });
 
@@ -123,7 +168,7 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
       res.json(parsed);
     } else {
       console.error("Python error:", errorOutput);
-      res.status(500).json({ error: "Greška pri dohvaćanju chunka.", details: errorOutput });
+      res.status(500).json({ error: "Error fetching chunk data.", details: errorOutput });
     }
   });
 };
@@ -193,7 +238,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
         console.error("[ERROR] Python error:", errorOutput);
         
         // Provide more helpful error messages
-        let errorMessage = "Greška pri dohvaćanju chunka.";
+        let errorMessage = "Error fetching chunk data.";
         if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
           errorMessage = "Python dependencies are missing. Please install: pip install pyedflib numpy mne";
         } else if (errorOutput.includes("FileNotFoundError")) {

@@ -21,7 +21,7 @@ const corsOptions = {
             'https://main--somnoviz.netlify.app',
             /https:\/\/.*--somnoviz\.netlify\.app$/,
             /https:\/\/.*\.netlify\.app$/
-        ] // Production origins - update with your actual Netlify URL
+        ] // Production origins - your Netlify URL
         : ["http://localhost:5173", "http://localhost:3000"], // Development origins
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
@@ -45,7 +45,9 @@ app.get('/test-python', async (_req, res) => {
     try {
         const { spawn } = require('child_process');
         const path = require('path');
-        const scriptPath = path.resolve(__dirname, 'scripts/test_python.py');
+        const scriptPath = process.env.NODE_ENV === 'production'
+            ? path.resolve(process.cwd(), 'src/scripts/test_python.py')
+            : path.resolve(__dirname, 'scripts/test_python.py');
         const python = spawn('python', [scriptPath]);
         let output = '';
         let errorOutput = '';
