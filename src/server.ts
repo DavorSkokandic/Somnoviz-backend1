@@ -49,7 +49,9 @@ app.get('/test-python', async (_req, res) => {
     const { spawn } = require('child_process');
     const path = require('path');
     
-    const scriptPath = path.resolve(__dirname, 'scripts/test_python.py');
+    const scriptPath = process.env.NODE_ENV === 'production'
+      ? path.resolve(process.cwd(), 'src/scripts/test_python.py')
+      : path.resolve(__dirname, 'scripts/test_python.py');
     const python = spawn('python', [scriptPath]);
     
     let output = '';

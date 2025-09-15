@@ -8,6 +8,35 @@ exports.handleMaxMinValues = exports.handleAHIAnalysis = exports.handleEdfMultiC
 const child_process_1 = require("child_process");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+// Helper function to get correct script paths in both development and production
+const getScriptPath = (scriptName) => {
+    // List of possible paths to check (in order of preference)
+    const possiblePaths = [
+        // Development: TypeScript source
+        path_1.default.resolve(__dirname, `../scripts/${scriptName}`),
+        // Development: if running from compiled dist
+        path_1.default.resolve(__dirname, `../../src/scripts/${scriptName}`),
+        // Production: Railway deployment
+        path_1.default.resolve(process.cwd(), `src/scripts/${scriptName}`),
+        // Alternative production path
+        path_1.default.resolve(process.cwd(), `dist/scripts/${scriptName}`),
+        // Fallback: relative to project root
+        path_1.default.resolve(process.cwd(), `scripts/${scriptName}`)
+    ];
+    // Try each path and return the first one that exists
+    for (const scriptPath of possiblePaths) {
+        if (fs_1.default.existsSync(scriptPath)) {
+            console.log(`[DEBUG] Found script at: ${scriptPath}`);
+            return scriptPath;
+        }
+    }
+    // If none found, log all attempted paths and return the first one
+    console.error(`[ERROR] Script '${scriptName}' not found in any of these locations:`);
+    possiblePaths.forEach((p, i) => {
+        console.error(`  ${i + 1}. ${p} (exists: ${fs_1.default.existsSync(p)})`);
+    });
+    return possiblePaths[0]; // Return first path as fallback
+};
 const handleFileUpload = async (req, res) => {
     try {
         const file = req.file;
@@ -16,7 +45,7 @@ const handleFileUpload = async (req, res) => {
         console.log("[DEBUG] File uploaded:", file.originalname);
         console.log("[DEBUG] File path:", file.path);
         const filePath = path_1.default.resolve(file.path);
-        const pythonScriptPath = path_1.default.resolve(__dirname, "../scripts/parseEdf.py");
+        const pythonScriptPath = getScriptPath("parseEdf.py");
         console.log("[DEBUG] Python script path:", pythonScriptPath);
         console.log("[DEBUG] Python script exists:", fs_1.default.existsSync(pythonScriptPath));
         const python = (0, child_process_1.spawn)("python", [pythonScriptPath, "info", filePath]);
@@ -59,8 +88,27 @@ const handleFileUpload = async (req, res) => {
                 }
             }
             else {
-                console.error("Python error:", errorOutput);
-                res.status(500).json({ error: "Greška pri obradi fajla.", details: errorOutput });
+                console.error("[ERROR] Python process failed with code:", code);
+                console.error("[ERROR] Python error output:", errorOutput);
+                console.error("[ERROR] Python stdout:", output);
+                // More detailed error message
+                let errorMessage = "Failed to process EDF file";
+                if (errorOutput.includes("No such file or directory")) {
+                    errorMessage = "Python script not found. Please check server configuration.";
+                }
+                else if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
+                    errorMessage = "Required Python modules are missing. Please check server dependencies.";
+                }
+                else if (errorOutput.trim()) {
+                    errorMessage = `Python processing error: ${errorOutput.trim()}`;
+                }
+                res.status(500).json({
+                    error: errorMessage,
+                    details: errorOutput,
+                    code: code,
+                    pythonScriptPath: pythonScriptPath,
+                    scriptExists: fs_1.default.existsSync(pythonScriptPath)
+                });
             }
         });
         python.on("error", (error) => {
@@ -83,7 +131,7 @@ const handleEdfChunk = async (req, res) => {
     if (!fs_1.default.existsSync(decodedPath)) {
         return res.status(404).json({ error: "Fajl ne postoji." });
     }
-    const pythonScriptPath = path_1.default.resolve(__dirname, "../scripts/parseEdf.py");
+    const pythonScriptPath = getScriptPath("parseEdf.py");
     const args = [pythonScriptPath, "chunk", decodedPath, channel, start_sample, num_samples];
     console.log("Executing Python chunk script with:", args.join(" "));
     const python = (0, child_process_1.spawn)("python", args);
@@ -104,7 +152,7 @@ const handleEdfChunk = async (req, res) => {
         }
         else {
             console.error("Python error:", errorOutput);
-            res.status(500).json({ error: "Greška pri dohvaćanju chunka.", details: errorOutput });
+            res.status(500).json({ error: "Error fetching chunk data.", details: errorOutput });
         }
     });
 };
@@ -124,7 +172,7 @@ const handleEdfChunkDownsample = async (req, res) => {
             console.log("[ERROR] File not found:", decodedPath);
             return res.status(404).json({ error: "Fajl ne postoji." });
         }
-        const scriptPath = path_1.default.resolve(__dirname, '../scripts/parseEdf.py');
+        const scriptPath = getScriptPath('parseEdf.py');
         console.log("[DEBUG] Python script path:", scriptPath);
         console.log("[DEBUG] Python script exists:", fs_1.default.existsSync(scriptPath));
         if (!fs_1.default.existsSync(scriptPath)) {
@@ -162,7 +210,7 @@ const handleEdfChunkDownsample = async (req, res) => {
             else {
                 console.error("[ERROR] Python error:", errorOutput);
                 // Provide more helpful error messages
-                let errorMessage = "Greška pri dohvaćanju chunka.";
+                let errorMessage = "Error fetching chunk data.";
                 if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
                     errorMessage = "Python dependencies are missing. Please install: pip install pyedflib numpy mne";
                 }
@@ -221,7 +269,7 @@ const handleEdfMultiChunk = async (req, res) => {
             max_points,
         ];
         console.log('[DEBUG] Spawning Python process with args:', args);
-        const pythonProcess = (0, child_process_1.spawn)('python', [path_1.default.resolve(__dirname, '../scripts/parseEdf.py'), ...args]);
+        const pythonProcess = (0, child_process_1.spawn)('python', [getScriptPath('parseEdf.py'), ...args]);
         let result = '';
         let errorOutput = '';
         pythonProcess.stdout.on('data', (data) => {
@@ -288,7 +336,7 @@ const handleAHIAnalysis = async (req, res) => {
             spo2Channel
         });
         // First, get the full data for both channels using existing parseEdf.py
-        const parseEdfScript = path_1.default.resolve(__dirname, "../scripts/parseEdf.py");
+        const parseEdfScript = getScriptPath("parseEdf.py");
         // Get flow channel data
         console.log('[DEBUG] Fetching flow channel data...');
         const flowData = await getChannelData(parseEdfScript, decodedFilePath, flowChannel);
@@ -304,7 +352,7 @@ const handleAHIAnalysis = async (req, res) => {
         };
         console.log('[DEBUG] Running AHI analysis algorithm...');
         // Run AHI analysis
-        const ahiScript = path_1.default.resolve(__dirname, "../scripts/ahi_analysis.py");
+        const ahiScript = getScriptPath("ahi_analysis.py");
         const analysisResults = await runAHIAnalysis(ahiScript, analysisInput);
         console.log('[DEBUG] AHI analysis completed successfully');
         // Return results
@@ -446,7 +494,7 @@ const handleMaxMinValues = async (req, res) => {
             return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
         }
         console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
-        const scriptPath = path_1.default.resolve(__dirname, "../scripts/parseEdf.py");
+        const scriptPath = getScriptPath("parseEdf.py");
         // Prepare command arguments
         const args = [
             scriptPath,

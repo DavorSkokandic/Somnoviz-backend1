@@ -5,7 +5,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "ts-node src/server.ts",
-    "build": "tsc",
+    "build": "tsc && npm run copy-scripts",
+    "copy-scripts": "cp -r src/scripts dist/ 2>/dev/null || xcopy src\\scripts dist\\scripts\\ /E /I /Y 2>nul || true",
     "start": "npm run build && node dist/server.js",
     "start:dev": "ts-node src/server.ts"
   },
