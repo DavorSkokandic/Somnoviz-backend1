@@ -2,10 +2,7 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "npm start"
-
-[build.env]
-NODE_ENV = "production"
+startCommand = "npm run build && node dist/server.js"
 
 [variables]
 NODE_ENV = "production"
