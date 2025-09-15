@@ -5,6 +5,13 @@ import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 
+// Helper function to get correct script paths in both development and production
+const getScriptPath = (scriptName: string): string => {
+  return process.env.NODE_ENV === 'production'
+    ? path.resolve(process.cwd(), `src/scripts/${scriptName}`)
+    : path.resolve(__dirname, `../scripts/${scriptName}`);
+};
+
 export const handleFileUpload = async (req: Request, res: Response) => {
   try {
     const file = req.file;
@@ -14,7 +21,7 @@ export const handleFileUpload = async (req: Request, res: Response) => {
     console.log("[DEBUG] File path:", file.path);
 
     const filePath = path.resolve(file.path);
-    const pythonScriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+    const pythonScriptPath = getScriptPath("parseEdf.py");
     
     console.log("[DEBUG] Python script path:", pythonScriptPath);
     console.log("[DEBUG] Python script exists:", fs.existsSync(pythonScriptPath));
@@ -90,7 +97,7 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
     return res.status(404).json({ error: "Fajl ne postoji." });
   }
 
-  const pythonScriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+  const pythonScriptPath = getScriptPath("parseEdf.py");
   const args = [pythonScriptPath, "chunk", decodedPath, channel as string, start_sample as string, num_samples as string];
 
   console.log("Executing Python chunk script with:", args.join(" "));
@@ -141,7 +148,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Fajl ne postoji." });
     }
 
-    const scriptPath = path.resolve(__dirname, '../scripts/parseEdf.py');
+    const scriptPath = getScriptPath('parseEdf.py');
     console.log("[DEBUG] Python script path:", scriptPath);
     console.log("[DEBUG] Python script exists:", fs.existsSync(scriptPath));
     
@@ -252,7 +259,7 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Spawning Python process with args:', args);
     
-    const pythonProcess = spawn('python', [path.resolve(__dirname, '../scripts/parseEdf.py'), ...args]);
+    const pythonProcess = spawn('python', [getScriptPath('parseEdf.py'), ...args]);
 
     let result = '';
     let errorOutput = '';
@@ -327,7 +334,7 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
     });
 
     // First, get the full data for both channels using existing parseEdf.py
-    const parseEdfScript = path.resolve(__dirname, "../scripts/parseEdf.py");
+    const parseEdfScript = getScriptPath("parseEdf.py");
     
     // Get flow channel data
     console.log('[DEBUG] Fetching flow channel data...');
@@ -348,7 +355,7 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
     console.log('[DEBUG] Running AHI analysis algorithm...');
     
     // Run AHI analysis
-    const ahiScript = path.resolve(__dirname, "../scripts/ahi_analysis.py");
+    const ahiScript = getScriptPath("ahi_analysis.py");
     const analysisResults = await runAHIAnalysis(ahiScript, analysisInput);
 
     console.log('[DEBUG] AHI analysis completed successfully');
@@ -513,7 +520,7 @@ export const handleMaxMinValues = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
 
-    const scriptPath = path.resolve(__dirname, "../scripts/parseEdf.py");
+    const scriptPath = getScriptPath("parseEdf.py");
     
     // Prepare command arguments
     const args = [
