@@ -58,8 +58,15 @@ export const handleFileUpload = async (req: Request, res: Response) => {
     let errorOutput = "";
 
     python.stdout.on("data", (data) => {
-      output += data.toString();
-      console.log("[PYTHON STDOUT]", data.toString());
+      const chunk = data.toString();
+      output += chunk;
+      console.log("[PYTHON STDOUT]", chunk);
+      
+      // Send progress updates if this looks like a progress message
+      if (chunk.includes('Processing') || chunk.includes('%') || chunk.includes('Loading')) {
+        // Note: In a real-world app, you'd use Server-Sent Events or WebSockets for progress
+        console.log("[PROGRESS]", chunk.trim());
+      }
     });
 
     python.stderr.on("data", (data) => {

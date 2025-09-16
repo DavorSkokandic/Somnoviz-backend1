@@ -24,11 +24,22 @@ const corsOptions = {
         ] // Production origins - your Netlify URL
         : ["http://localhost:5173", "http://localhost:3000"], // Development origins
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-    optionsSuccessStatus: 200 // For legacy browser support
+    credentials: false, // Changed to false to avoid CORS credential issues
+    optionsSuccessStatus: 200, // For legacy browser support
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar']
 };
 app.use((0, cors_1.default)(corsOptions));
-app.use(express_1.default.json()); // Za parsiranje JSON tijela zahtjeva
+// Increase request size limits for large EDF files
+app.use(express_1.default.json({ limit: '500mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '500mb' }));
+// Add request timeout middleware (5 minutes)
+app.use((req, res, next) => {
+    // Set timeout to 5 minutes for all requests
+    req.setTimeout(300000); // 5 minutes
+    res.setTimeout(300000); // 5 minutes
+    next();
+});
 app.get('/', (_req, res) => {
     res.send('Somnoviz Backend Running!');
 });
