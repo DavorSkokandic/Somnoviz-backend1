@@ -34,11 +34,11 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '500mb' }));
 app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 
-// Add request timeout middleware (5 minutes)
+// Add request timeout middleware (10 minutes for Render free tier)
 app.use((req, res, next) => {
-  // Set timeout to 5 minutes for all requests
-  req.setTimeout(300000); // 5 minutes
-  res.setTimeout(300000); // 5 minutes
+  // Set timeout to 10 minutes for all requests (Render free tier is slower)
+  req.setTimeout(600000); // 10 minutes
+  res.setTimeout(600000); // 10 minutes
   next();
 });
 
@@ -52,6 +52,16 @@ app.get('/test', (_req, res) => {
     message: 'Backend is working!',
     timestamp: new Date().toISOString(),
     pythonAvailable: true // We'll test this
+  });
+});
+
+// Add health check endpoint
+app.get('/api/health', (_req, res) => {
+  res.json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    server: 'Render',
+    timeout: '10 minutes'
   });
 });
 
