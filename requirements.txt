@@ -1,5 +1,2 @@
 pyedflib==0.1.36
 numpy==1.24.4
-mne==1.5.1
-scipy==1.11.4
-setuptools==69.5.1
