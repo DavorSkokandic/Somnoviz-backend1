@@ -2,7 +2,7 @@ services:
   - type: web
     name: somnoviz-backend
     env: node
-    buildCommand: npm install && pip install -r requirements.txt && npm run build
+    buildCommand: npm install --production=false && python3.11 -m pip install -r requirements.txt && npm run build
     startCommand: node dist/server.js
     envVars:
       - key: NODE_ENV
@@ -11,3 +11,5 @@ services:
         value: 72
       - key: AUTO_CLEANUP_ENABLED
         value: true
+      - key: PYTHON_VERSION
+        value: "3.11"
