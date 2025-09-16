@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: somnoviz-backend
+    env: node
+    buildCommand: npm install && pip install -r requirements.txt && npm run build
+    startCommand: node dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FILE_MAX_AGE_HOURS
+        value: 72
+      - key: AUTO_CLEANUP_ENABLED
+        value: true
