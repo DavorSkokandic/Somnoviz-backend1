@@ -54,6 +54,8 @@ export const handleFileUpload = async (req: Request, res: Response) => {
     
     // Use python3 in production, python in development
     const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    console.log(`[DEBUG] Attempting to use Python command: ${pythonCommand}`);
+    
     const python = spawn(pythonCommand, [pythonScriptPath, "info", filePath]);
 
     let output = "";
