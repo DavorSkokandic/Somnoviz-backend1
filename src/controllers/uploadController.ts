@@ -52,7 +52,9 @@ export const handleFileUpload = async (req: Request, res: Response) => {
     console.log("[DEBUG] Python script path:", pythonScriptPath);
     console.log("[DEBUG] Python script exists:", fs.existsSync(pythonScriptPath));
     
-    const python = spawn("python", [pythonScriptPath, "info", filePath]);
+    // Use python3 in production, python in development
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, [pythonScriptPath, "info", filePath]);
 
     let output = "";
     let errorOutput = "";
@@ -154,7 +156,9 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
 
   console.log("Executing Python chunk script with:", args.join(" "));
 
-  const python = spawn("python", args);
+  // Use python3 in production, python in development
+  const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+  const python = spawn(pythonCommand, args);
 
   let output = "";
   let errorOutput = "";
@@ -213,7 +217,9 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
 
     console.log("[DEBUG] Executing Python downsample script with:", args.join(" "));
 
-    const python = spawn("python", args);
+    // Use python3 in production, python in development
+  const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+  const python = spawn(pythonCommand, args);
 
     let output = "";
     let errorOutput = "";

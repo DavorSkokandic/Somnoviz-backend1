@@ -64,7 +64,9 @@ app.get('/test-python', async (_req, res) => {
     const scriptPath = process.env.NODE_ENV === 'production'
       ? path.resolve(process.cwd(), 'src/scripts/test_python.py')
       : path.resolve(__dirname, 'scripts/test_python.py');
-    const python = spawn('python', [scriptPath]);
+    // Use python3 in production, python in development
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, [scriptPath]);
     
     let output = '';
     let errorOutput = '';
