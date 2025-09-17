@@ -1,32 +1,8 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/*.js",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "api/*.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    }
-  ],
   "functions": {
-    "api/*.py": {
-      "runtime": "python3.11"
-    },
     "api/*.js": {
       "runtime": "nodejs18.x"
     }
-  },
-  "env": {
-    "NODE_ENV": "production",
-    "FILE_MAX_AGE_HOURS": "72",
-    "AUTO_CLEANUP_ENABLED": "true"
   }
 }
