@@ -10,6 +10,7 @@ dotenv.config();
 const app = express();
 
 const PORT = process.env.PORT || 5000;
+const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 // Configure CORS for development and production
 const corsOptions = {
@@ -172,6 +173,15 @@ app.post('/api/cleanup/manual', async (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  try {
+    const fs = require('fs');
+    if (!fs.existsSync(UPLOAD_DIR)) {
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      console.log(`[INIT] Created upload directory at ${UPLOAD_DIR}`);
+    }
+  } catch (e) {
+    console.error('[INIT] Failed to ensure upload directory exists:', e);
+  }
   
   // Start the automatic file cleanup service if enabled
   if (cleanupConfig.enabled) {
@@ -180,8 +190,8 @@ app.listen(PORT, () => {
     console.log(`  - Cleanup interval: ${cleanupConfig.intervalMinutes} minutes`);
     console.log(`  - Upload directory: ${cleanupConfig.uploadDir}`);
     
-    // Initialize service with config
-    fileCleanupService.updateConfig(cleanupConfig.maxAgeHours);
+    // Initialize service with config (propagate uploadDir and maxAgeHours)
+    fileCleanupService.updateConfig(cleanupConfig.maxAgeHours, cleanupConfig.uploadDir);
     fileCleanupService.start(cleanupConfig.intervalMinutes);
   } else {
     console.log(`[FileCleanup] Automatic cleanup is disabled`);

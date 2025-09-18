@@ -5,8 +5,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "ts-node src/server.ts",
-    "build": "echo 'Vercel serverless - no build needed'",
-    "start": "echo 'Vercel serverless - no start needed'"
+    "build": "tsc && npm run copy-scripts",
+    "copy-scripts": "cp -r src/scripts dist/ 2>/dev/null || xcopy src\\scripts dist\\scripts\\ /E /I /Y 2>nul || true",
+    "start": "node dist/server.js"
   },
   "keywords": [],
   "author": "",
