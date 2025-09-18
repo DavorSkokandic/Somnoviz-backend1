@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
+import fs from "fs";
 import {handleFileUpload} from "../controllers/uploadController";
 import {handleEdfChunk} from "../controllers/uploadController";
 import {handleEdfChunkDownsample} from "../controllers/uploadController";
@@ -11,9 +12,19 @@ import { handleMaxMinValues } from "../controllers/uploadController";
 const router = express.Router();
 
 
+// Resolve uploads directory from environment or default to 'uploads'
+const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    try {
+      if (!fs.existsSync(UPLOAD_DIR)) {
+        fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      }
+    } catch (e) {
+      console.error('[UPLOAD] Failed to ensure upload dir exists:', e);
+    }
+    cb(null, `${UPLOAD_DIR}/`);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
