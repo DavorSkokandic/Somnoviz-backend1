@@ -255,7 +255,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
         // Provide more helpful error messages
         let errorMessage = "Error fetching chunk data.";
         if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
-          errorMessage = "Python dependencies are missing. Please install: pip install pyedflib numpy mne";
+          errorMessage = "Required Python modules are missing. Please check server dependencies.";
         } else if (errorOutput.includes("FileNotFoundError")) {
           errorMessage = "EDF file not found or corrupted.";
         } else if (errorOutput.includes("IndexError")) {
@@ -265,7 +265,9 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
         res.status(500).json({ 
           error: errorMessage, 
           details: errorOutput,
-          suggestion: "Check if Python and required packages (pyedflib, numpy, mne) are installed"
+          code: code || 1,
+          pythonScriptPath: scriptPath,
+          scriptExists: require('fs').existsSync(scriptPath)
         });
       }
     });
@@ -572,13 +574,15 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
 // Handler for finding max/min values from raw data
 export const handleMaxMinValues = async (req: Request, res: Response) => {
   try {
+    console.log('[DEBUG] Max-min request body:', req.body);
     const { filePath, channels, startSec = 0, endSec } = req.body;
     
     if (!filePath || !channels || !Array.isArray(channels)) {
+      console.log('[DEBUG] Validation failed:', { filePath, channels, isArray: Array.isArray(channels) });
       return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
     }
 
-    console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
+    console.log('[DEBUG] Max-min request validated:', { filePath, channels, startSec, endSec });
 
     const scriptPath = getScriptPath("parseEdf.py");
     
@@ -597,7 +601,9 @@ export const handleMaxMinValues = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Running max-min command:', args);
 
-    const python = spawn('python', args);
+    // Use python3 in production, python in development
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, args);
     let output = '';
     let errorOutput = '';
 

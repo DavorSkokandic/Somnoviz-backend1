@@ -4,7 +4,6 @@ import os
 import traceback
 from pyedflib import EdfReader
 import numpy as np
-from mne.io import read_raw_edf
 
 def error_response(message):
     print(json.dumps({"error": message}))

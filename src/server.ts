@@ -14,18 +14,44 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 // Configure CORS for development and production
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' 
-    ? [
-        'https://somnoviz.netlify.app',
-        'https://main--somnoviz.netlify.app', 
-        /https:\/\/.*--somnoviz\.netlify\.app$/,
-        /https:\/\/.*\.netlify\.app$/
-      ] // Production origins - your Netlify URL
-    : ["http://localhost:5173", "http://localhost:3000"], // Development origins
+  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? [
+          'https://somnoviz.netlify.app',
+          'https://main--somnoviz.netlify.app',
+          /https:\/\/.*--somnoviz\.netlify\.app$/,
+          /https:\/\/.*\.netlify\.app$/,
+          /https:\/\/.*\.vercel\.app$/,
+          /https:\/\/.*\.github\.io$/
+        ]
+      : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
+    
+    console.log(`[CORS] Checking origin: ${origin}`);
+    console.log(`[CORS] NODE_ENV: ${process.env.NODE_ENV}`);
+    
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (typeof allowedOrigin === 'string') {
+        return origin === allowedOrigin;
+      } else {
+        return allowedOrigin.test(origin);
+      }
+    });
+    
+    console.log(`[CORS] Origin ${origin} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: false, // Changed to false to avoid CORS credential issues
-  optionsSuccessStatus: 200, // For legacy browser support
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false,
+  optionsSuccessStatus: 200,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar']
 };
 
