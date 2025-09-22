@@ -641,8 +641,13 @@ async function getFullChannelData(scriptPath: string, filePath: string, channel:
         
         console.log(`[DEBUG] Channel ${channel}: ${sampleRate}Hz, ${duration}s, ${totalSamples} samples`);
         
-        // Get full resolution data (all samples)
-        const args = [scriptPath, 'chunk', filePath, channel, '0', totalSamples.toString()];
+        // For AHI analysis, we don't need full resolution - use reasonable sample size
+        // Limit to maximum 1 hour of data at the sample rate, or 100k samples, whichever is smaller
+        const maxSamplesForAHI = Math.min(totalSamples, Math.min(sampleRate * 3600, 100000));
+        console.log(`[DEBUG] Limiting AHI data to ${maxSamplesForAHI} samples (from ${totalSamples} total)`);
+        
+        // Use chunk-downsample for better performance
+        const args = [scriptPath, 'chunk-downsample', filePath, channel, '0', maxSamplesForAHI.toString(), '1000'];
         
         console.log(`[DEBUG] Getting full channel data for ${channel}: ${args.join(' ')}`);
         const python = spawn(pythonCommand, args);
