@@ -619,20 +619,23 @@ async function getFullChannelData(scriptPath: string, filePath: string, channel:
         const fileInfo = JSON.parse(infoOutput);
         console.log(`[DEBUG] File info parsed:`, fileInfo);
         
-        if (!fileInfo.channels || !Array.isArray(fileInfo.channels)) {
-          reject(new Error(`Invalid file info structure: channels not found or not an array`));
+        // The Python script returns 'signalLabels' array, not 'channels'
+        const channelLabels = fileInfo.signalLabels || fileInfo.channels;
+        if (!channelLabels || !Array.isArray(channelLabels)) {
+          reject(new Error(`Invalid file info structure: signalLabels/channels not found or not an array`));
           return;
         }
         
-        const channelInfo = fileInfo.channels.find((c: any) => c.label === channel);
-        
-        if (!channelInfo) {
-          console.log(`[DEBUG] Available channels:`, fileInfo.channels.map((c: any) => c.label));
-          reject(new Error(`Channel ${channel} not found in file. Available channels: ${fileInfo.channels.map((c: any) => c.label).join(', ')}`));
+        // Find channel by label in the signalLabels array
+        const channelIndex = channelLabels.indexOf(channel);
+        if (channelIndex === -1) {
+          console.log(`[DEBUG] Available channels:`, channelLabels);
+          reject(new Error(`Channel ${channel} not found in file. Available channels: ${channelLabels.join(', ')}`));
           return;
         }
         
-        const sampleRate = channelInfo.frequency;
+        // Get channel info from frequencies array
+        const sampleRate = fileInfo.frequencies[channelIndex];
         const duration = fileInfo.duration;
         const totalSamples = Math.floor(sampleRate * duration);
         
