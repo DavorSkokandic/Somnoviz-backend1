@@ -592,42 +592,85 @@ async function getFullChannelData(scriptPath: string, filePath: string, channel:
   return new Promise((resolve, reject) => {
     const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
     
-    // Get full resolution data (no downsampling for AHI analysis)
-    const args = [scriptPath, 'chunk', filePath, channel, '0', '0']; // 0,0 means get all data
+    // First get file info to determine total samples
+    const infoArgs = [scriptPath, 'info', filePath];
+    console.log(`[DEBUG] Getting file info for ${channel}: ${infoArgs.join(' ')}`);
     
-    console.log(`[DEBUG] Getting full channel data for ${channel}: ${args.join(' ')}`);
-    const python = spawn(pythonCommand, args);
+    const infoProcess = spawn(pythonCommand, infoArgs);
+    let infoOutput = '';
+    let infoError = '';
     
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
+    infoProcess.stdout.on('data', (data) => {
+      infoOutput += data.toString();
     });
-
-    python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+    
+    infoProcess.stderr.on('data', (data) => {
+      infoError += data.toString();
     });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          const data = JSON.parse(output);
-          resolve({
-            data: data.data,
-            sampleRate: 100, // Will be determined from file info
-            channel: channel
-          });
-        } catch (err) {
-          reject(new Error('Failed to parse full channel data'));
+    
+    infoProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`[ERROR] Failed to get file info: ${infoError}`);
+        reject(new Error(`Failed to get file info: ${infoError}`));
+        return;
+      }
+      
+      try {
+        const fileInfo = JSON.parse(infoOutput);
+        const channelInfo = fileInfo.channels.find((c: any) => c.label === channel);
+        
+        if (!channelInfo) {
+          reject(new Error(`Channel ${channel} not found in file`));
+          return;
         }
-      } else {
-        reject(new Error(`Failed to get full channel data: ${errorOutput}`));
+        
+        const sampleRate = channelInfo.frequency;
+        const duration = fileInfo.duration;
+        const totalSamples = Math.floor(sampleRate * duration);
+        
+        console.log(`[DEBUG] Channel ${channel}: ${sampleRate}Hz, ${duration}s, ${totalSamples} samples`);
+        
+        // Get full resolution data (all samples)
+        const args = [scriptPath, 'chunk', filePath, channel, '0', totalSamples.toString()];
+        
+        console.log(`[DEBUG] Getting full channel data for ${channel}: ${args.join(' ')}`);
+        const python = spawn(pythonCommand, args);
+        
+        let output = '';
+        let errorOutput = '';
+
+        python.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+
+        python.stderr.on('data', (data) => {
+          errorOutput += data.toString();
+        });
+
+        python.on('close', (code) => {
+          if (code === 0) {
+            try {
+              const data = JSON.parse(output);
+              resolve({
+                data: data.data,
+                sampleRate: sampleRate, // Use actual sample rate from file info
+                channel: channel
+              });
+            } catch (err) {
+              reject(new Error('Failed to parse full channel data'));
+            }
+          } else {
+            reject(new Error(`Failed to get full channel data: ${errorOutput}`));
+          }
+        });
+        
+      } catch (err) {
+        reject(new Error(`Failed to parse file info: ${err}`));
       }
     });
 
-    python.on('error', (error) => {
-      reject(new Error(`Failed to start Python process: ${error.message}`));
+    infoProcess.on('error', (error) => {
+      reject(new Error(`Failed to start Python info process: ${error.message}`));
     });
   });
 }

@@ -29,9 +29,11 @@ const corsOptions = {
           /https:\/\/.*\.netlify\.app$/,
           /https:\/\/.*\.vercel\.app$/,
           /https:\/\/.*\.github\.io$/,
-          // Additional fallback patterns for Netlify
+          // Additional fallback patterns for Netlify (including new URL)
           /^https:\/\/[a-f0-9]{24}--somnoviz\.netlify\.app$/,
-          /^https:\/\/.*\.netlify\.app$/
+          /^https:\/\/.*\.netlify\.app$/,
+          // Specific pattern for the new URL
+          'https://68d18920cadb7f00080116a2--somnoviz.netlify.app'
         ]
       : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
     
