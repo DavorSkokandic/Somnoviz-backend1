@@ -370,12 +370,15 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
 export const handleAHIAnalysis = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] AHI analysis request received:', req.body);
+    console.log('[DEBUG] Request headers:', req.headers);
+    console.log('[DEBUG] Content-Type:', req.headers['content-type']);
     
     const { filePath, flowChannel, spo2Channel } = req.body;
 
     // Validate required parameters
     if (!filePath || !flowChannel || !spo2Channel) {
       console.log('[ERROR] Missing required parameters for AHI analysis');
+      console.log('[DEBUG] Received data:', { filePath, flowChannel, spo2Channel });
       return res.status(400).json({ 
         error: 'Missing required parameters: filePath, flowChannel, spo2Channel' 
       });
@@ -1230,10 +1233,14 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
 export const handleMaxMinValues = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] Max-min request body:', req.body);
+    console.log('[DEBUG] Request headers:', req.headers);
+    console.log('[DEBUG] Content-Type:', req.headers['content-type']);
+    
     const { filePath, channels, startSec = 0, endSec } = req.body;
     
     if (!filePath || !channels || !Array.isArray(channels)) {
       console.log('[DEBUG] Validation failed:', { filePath, channels, isArray: Array.isArray(channels) });
+      console.log('[DEBUG] Received data:', { filePath, channels, startSec, endSec });
       return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
     }
 

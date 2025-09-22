@@ -16,7 +16,10 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 const corsOptions = {
   origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
     // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    if (!origin) {
+      console.log(`[CORS] No origin provided - allowing`);
+      return callback(null, true);
+    }
     
     const allowedOrigins = process.env.NODE_ENV === 'production' 
       ? [
@@ -25,27 +28,36 @@ const corsOptions = {
           /https:\/\/.*--somnoviz\.netlify\.app$/,
           /https:\/\/.*\.netlify\.app$/,
           /https:\/\/.*\.vercel\.app$/,
-          /https:\/\/.*\.github\.io$/
+          /https:\/\/.*\.github\.io$/,
+          // Additional fallback patterns for Netlify
+          /^https:\/\/[a-f0-9]{24}--somnoviz\.netlify\.app$/,
+          /^https:\/\/.*\.netlify\.app$/
         ]
       : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
     
     console.log(`[CORS] Checking origin: ${origin}`);
     console.log(`[CORS] NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log(`[CORS] Allowed origins:`, allowedOrigins);
     
     const isAllowed = allowedOrigins.some(allowedOrigin => {
       if (typeof allowedOrigin === 'string') {
-        return origin === allowedOrigin;
+        const match = origin === allowedOrigin;
+        console.log(`[CORS] String comparison: ${origin} === ${allowedOrigin} = ${match}`);
+        return match;
       } else {
-        return allowedOrigin.test(origin);
+        const match = allowedOrigin.test(origin);
+        console.log(`[CORS] Regex test: ${allowedOrigin} against ${origin} = ${match}`);
+        return match;
       }
     });
     
-    console.log(`[CORS] Origin ${origin} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
+    console.log(`[CORS] Final result: Origin ${origin} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
     
     if (isAllowed) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.log(`[CORS ERROR] Origin ${origin} not allowed. Allowed origins:`, allowedOrigins);
+      callback(new Error(`Not allowed by CORS: ${origin}`));
     }
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
