@@ -617,10 +617,18 @@ async function getFullChannelData(scriptPath: string, filePath: string, channel:
       
       try {
         const fileInfo = JSON.parse(infoOutput);
+        console.log(`[DEBUG] File info parsed:`, fileInfo);
+        
+        if (!fileInfo.channels || !Array.isArray(fileInfo.channels)) {
+          reject(new Error(`Invalid file info structure: channels not found or not an array`));
+          return;
+        }
+        
         const channelInfo = fileInfo.channels.find((c: any) => c.label === channel);
         
         if (!channelInfo) {
-          reject(new Error(`Channel ${channel} not found in file`));
+          console.log(`[DEBUG] Available channels:`, fileInfo.channels.map((c: any) => c.label));
+          reject(new Error(`Channel ${channel} not found in file. Available channels: ${fileInfo.channels.map((c: any) => c.label).join(', ')}`));
           return;
         }
         
