@@ -96,8 +96,8 @@ export const handleFileUpload = async (req: Request, res: Response) => {
           startTime: parsed.startTime,
           previewData,
           diagnostics: {},
-          patientInfo: parsed.patientInfo || "Nepoznat pacijent",
-          recordingInfo: parsed.recordingInfo || "Nepoznata snimka",
+          patientInfo: parsed.patientInfo || "Unknown Patient",
+          recordingInfo: parsed.recordingInfo || "Unknown Recording",
           tempFilePath: filePath,
           originalFileName: file.originalname,
         };
@@ -145,12 +145,12 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
   const { filePath, channel, start_sample, num_samples } = req.query;
 
   if (!filePath || !channel || !start_sample || !num_samples) {
-    return res.status(400).json({ error: "Nedostaju parametri." });
+    return res.status(400).json({ error: "Missing parameters." });
   }
 
   const decodedPath = decodeURIComponent(filePath as string);
   if (!fs.existsSync(decodedPath)) {
-    return res.status(404).json({ error: "Fajl ne postoji." });
+    return res.status(404).json({ error: "File does not exist." });
   }
 
   const pythonScriptPath = getScriptPath("parseEdf.py");
@@ -194,7 +194,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
 
     if (!filePath || !channel || !start_sample || !num_samples || !target_points) {
       console.log("[ERROR] Missing parameters:", { filePath, channel, start_sample, num_samples, target_points });
-      return res.status(400).json({ error: "Nedostaju parametri." });
+      return res.status(400).json({ error: "Missing parameters." });
     }
 
     const decodedPath = decodeURIComponent(filePath as string);
@@ -203,7 +203,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
     
     if (!fs.existsSync(decodedPath)) {
       console.log("[ERROR] File not found:", decodedPath);
-      return res.status(404).json({ error: "Fajl ne postoji." });
+      return res.status(404).json({ error: "File does not exist." });
     }
 
     const scriptPath = getScriptPath('parseEdf.py');
@@ -321,7 +321,8 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Spawning Python process with args:', args);
     
-    const pythonProcess = spawn('python', [getScriptPath('parseEdf.py'), ...args]);
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const pythonProcess = spawn(pythonCommand, [getScriptPath('parseEdf.py'), ...args]);
 
     let result = '';
     let errorOutput = '';
@@ -350,7 +351,42 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
             labelCount: parsed.labels?.length || 0,
             channelCount: Object.keys(parsed.channels || {}).length
           });
-          res.json(parsed);
+          
+          // Transform Python script output to match frontend expectations
+          const transformedResponse = {
+            channels: Object.entries(parsed.channels || {}).map(([channelName, channelInfo]) => {
+              // Handle both old format (array) and new format (object with data, sample_rate, etc.)
+              let channelData, sampleRate;
+              
+              if (Array.isArray(channelInfo)) {
+                // Old format: just array of data
+                channelData = channelInfo;
+                // Calculate sample rate based on data length and time range
+                const timeRange = parseFloat(end_sec as string) - parseFloat(start_sec as string);
+                const dataLength = channelData.length;
+                sampleRate = timeRange > 0 && dataLength > 0 ? dataLength / timeRange : 1;
+              } else {
+                // New format: object with data, sample_rate, original_length
+                channelData = (channelInfo as any).data || [];
+                sampleRate = (channelInfo as any).sample_rate || 1;
+              }
+              
+              return {
+                name: channelName,
+                data: channelData,
+                sample_rate: sampleRate,
+                start_time_sec: parseFloat(start_sec as string),
+                stats: {} // Optional stats can be added later
+              };
+            })
+          };
+          
+          console.log('[DEBUG] Transformed response:', {
+            channelCount: transformedResponse.channels.length,
+            channelNames: transformedResponse.channels.map(c => c.name)
+          });
+          
+          res.json(transformedResponse);
         } catch (err) {
           console.error('[ERROR] JSON parse failed:', err);
           console.error('[PYTHON STDOUT]', result);
@@ -413,13 +449,14 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] AHI analysis completed successfully');
     
-    // Return results
+    // Return results in the format expected by the frontend
     res.json({
       success: true,
-      ahi: ahiResults.ahi,
-      events: ahiResults.events,
-      summary: ahiResults.summary,
-      message: "AHI analysis completed using efficient backend processing"
+      ahi_analysis: ahiResults.ahi_analysis,
+      apnea_events: ahiResults.apnea_events,
+      hypopnea_events: ahiResults.hypopnea_events,
+      all_events: ahiResults.all_events,
+      message: "AHI analysis completed using professional Python engine"
     });
 
   } catch (error) {
@@ -515,70 +552,15 @@ async function runLightweightAHIAnalysis(channelStats: any, flowChannel: string,
       console.warn('[WARNING] Failed to clean up temporary file:', cleanupError);
     }
     
-    // Optimize results for frontend (extract only essential data)
+    // Return results in the exact format expected by the frontend
     const optimizedResults = {
-      success: true,
-      ahi: ahiResults.ahi_analysis.ahi_score,
-      events: {
-        apneas: ahiResults.ahi_analysis.apnea_count,
-        hypopneas: ahiResults.ahi_analysis.hypopnea_count,
-        total: ahiResults.ahi_analysis.total_events
-      },
-      // Send optimized event summaries (not full raw data)
-      eventSummary: {
-        apneaEvents: ahiResults.apnea_events.map((event: any) => ({
-          startTime: Math.round(event.start_time),
-          duration: Math.round(event.duration * 10) / 10,
-          severity: event.severity,
-          type: 'apnea'
-        })),
-        hypopneaEvents: ahiResults.hypopnea_events.map((event: any) => ({
-          startTime: Math.round(event.start_time),
-          duration: Math.round(event.duration * 10) / 10,
-          severity: event.severity,
-          spo2Drop: Math.round(event.spo2_drop * 10) / 10,
-          type: 'hypopnea'
-        }))
-      },
-      metrics: {
-        averageEventDuration: ahiResults.ahi_analysis.avg_apnea_duration,
-        longestEvent: Math.max(
-          ...ahiResults.apnea_events.map((e: any) => e.duration),
-          ...ahiResults.hypopnea_events.map((e: any) => e.duration)
-        ),
-        oxygenSaturation: {
-          // Extract from SpO2 data if available
-          baseline: spo2Stats.max?.value || 0,
-          minimum: spo2Stats.min?.value || 0,
-          average: (spo2Stats.max?.value + spo2Stats.min?.value) / 2 || 0
-        },
-        eventDistribution: {
-          apnea: ahiResults.ahi_analysis.apnea_count,
-          hypopnea: ahiResults.ahi_analysis.hypopnea_count,
-          severe: ahiResults.apnea_events.filter((e: any) => e.severity === 'severe').length
-        },
-        analysisQuality: {
-          fullResolutionUsed: true,
-          totalDataPoints: flowData.data.length + spo2Data.data.length,
-          confidence: 0.95, // High confidence using professional Python script
-          professionalAnalysis: true
-        }
-      },
-      summary: {
-        severity: ahiResults.ahi_analysis.severity,
-        severityColor: ahiResults.ahi_analysis.severity_color,
-        flowChannel: flowChannel,
-        spo2Channel: spo2Channel,
-        analysisMethod: 'Professional Python AHI Analysis Script',
-        recordingDuration: `${ahiResults.ahi_analysis.recording_duration_hours} hours`,
-        eventPercentage: ahiResults.ahi_analysis.event_percentage,
-        aasCompliant: true,
-        fullResolutionAnalysis: true,
-        professionalScript: true
-      }
+      ahi_analysis: ahiResults.ahi_analysis,
+      apnea_events: ahiResults.apnea_events,
+      hypopnea_events: ahiResults.hypopnea_events,
+      all_events: ahiResults.all_events
     };
     
-    console.log(`[DEBUG] AHI analysis complete: ${optimizedResults.ahi} (${optimizedResults.summary.severity})`);
+    console.log(`[DEBUG] AHI analysis complete: ${optimizedResults.ahi_analysis.ahi_score} (${optimizedResults.ahi_analysis.severity})`);
     return optimizedResults;
     
   } catch (error) {
@@ -1158,7 +1140,8 @@ function calculateSleepMetrics(apneaEvents: any[], hypopneaEvents: any[], spo2Da
 async function getChannelData(scriptPath: string, filePath: string, channel: string): Promise<{data: number[], sampleRate: number}> {
   return new Promise((resolve, reject) => {
     // Get channel info first
-    const infoProcess = spawn('python', [scriptPath, 'info', filePath]);
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const infoProcess = spawn(pythonCommand, [scriptPath, 'info', filePath]);
     let infoOutput = '';
     let errorOutput = '';
 
@@ -1194,7 +1177,8 @@ async function getChannelData(scriptPath: string, filePath: string, channel: str
         
         console.log(`[DEBUG] Getting channel data: ${channel}, totalSamples: ${totalSamples}, targetPoints: ${targetPoints}`);
         
-        const dataProcess = spawn('python', [scriptPath, 'chunk-downsample', filePath, channel, '0', totalSamples.toString(), targetPoints.toString()]);
+        const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+        const dataProcess = spawn(pythonCommand, [scriptPath, 'chunk-downsample', filePath, channel, '0', totalSamples.toString(), targetPoints.toString()]);
         let dataOutput = '';
         let dataError = '';
 
@@ -1247,7 +1231,8 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
       console.log('[DEBUG] Created temp file:', tempFile);
       
       // Modified AHI script to read from file instead of command line
-      const analysisProcess = spawn('python', [scriptPath, tempFile]);
+      const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+      const analysisProcess = spawn(pythonCommand, [scriptPath, tempFile]);
       let output = '';
       let errorOutput = '';
 

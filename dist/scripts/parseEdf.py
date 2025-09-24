@@ -4,7 +4,6 @@ import os
 import traceback
 from pyedflib import EdfReader
 import numpy as np
-from mne.io import read_raw_edf
 
 def error_response(message):
     print(json.dumps({"error": message}))
@@ -215,6 +214,7 @@ def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points)
 
             per_channel_data = {}
             per_channel_lengths = []
+            per_channel_sample_rates = {}
 
             for ch in channels:
                 try:
@@ -246,6 +246,7 @@ def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points)
                     arr = np.asarray(raw_signal, dtype=float)
                     per_channel_data[ch] = arr
                     per_channel_lengths.append(len(arr))
+                    per_channel_sample_rates[ch] = sfreq
                 except Exception as e:
                     print(f"[ERROR] Failed reading channel {ch}: {e}", file=sys.stderr)
                     continue
@@ -270,7 +271,11 @@ def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points)
                 else:
                     idx = np.floor(np.linspace(0, n - 1, desired_points)).astype(int)
                     ds = data[idx]
-                response["channels"][ch] = ds.tolist()
+                response["channels"][ch] = {
+                    "data": ds.tolist(),
+                    "sample_rate": per_channel_sample_rates.get(ch, 1.0),
+                    "original_length": n
+                }
 
         print(f"[DEBUG] Multi-channel chunk built: labels={len(response['labels'])}, channels={len(response['channels'])}", file=sys.stderr)
         return response

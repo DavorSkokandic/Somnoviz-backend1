@@ -138,10 +138,14 @@ class FileCleanupService {
     /**
      * Update cleanup configuration
      */
-    updateConfig(maxAgeHours) {
+    updateConfig(maxAgeHours, uploadDir) {
         if (maxAgeHours !== undefined) {
             this.maxAgeHours = maxAgeHours;
             console.log(`[FileCleanup] Updated max age to ${maxAgeHours} hours`);
+        }
+        if (uploadDir !== undefined) {
+            this.uploadDir = uploadDir;
+            console.log(`[FileCleanup] Updated upload directory to ${uploadDir}`);
         }
     }
 }

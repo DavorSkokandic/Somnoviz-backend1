@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
+const fs_1 = __importDefault(require("fs"));
 const uploadController_1 = require("../controllers/uploadController");
 const uploadController_2 = require("../controllers/uploadController");
 const uploadController_3 = require("../controllers/uploadController");
@@ -12,9 +13,19 @@ const uploadController_4 = require("../controllers/uploadController");
 const uploadController_5 = require("../controllers/uploadController");
 const uploadController_6 = require("../controllers/uploadController");
 const router = express_1.default.Router();
+// Resolve uploads directory from environment or default to 'uploads'
+const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 const storage = multer_1.default.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, "uploads/");
+        try {
+            if (!fs_1.default.existsSync(UPLOAD_DIR)) {
+                fs_1.default.mkdirSync(UPLOAD_DIR, { recursive: true });
+            }
+        }
+        catch (e) {
+            console.error('[UPLOAD] Failed to ensure upload dir exists:', e);
+        }
+        cb(null, `${UPLOAD_DIR}/`);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);

@@ -33,7 +33,11 @@ const corsOptions = {
           /^https:\/\/[a-f0-9]{24}--somnoviz\.netlify\.app$/,
           /^https:\/\/.*\.netlify\.app$/,
           // Specific pattern for the new URL
-          'https://68d18920cadb7f00080116a2--somnoviz.netlify.app'
+          'https://68d18920cadb7f00080116a2--somnoviz.netlify.app',
+          // Allow localhost for development testing
+          'http://localhost:5173',
+          'http://localhost:3000',
+          'http://localhost:5000'
         ]
       : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
     
