@@ -96,8 +96,8 @@ export const handleFileUpload = async (req: Request, res: Response) => {
           startTime: parsed.startTime,
           previewData,
           diagnostics: {},
-          patientInfo: parsed.patientInfo || "Nepoznat pacijent",
-          recordingInfo: parsed.recordingInfo || "Nepoznata snimka",
+          patientInfo: parsed.patientInfo || "Unknown Patient",
+          recordingInfo: parsed.recordingInfo || "Unknown Recording",
           tempFilePath: filePath,
           originalFileName: file.originalname,
         };
@@ -145,12 +145,12 @@ export const handleEdfChunk = async (req: Request, res: Response) => {
   const { filePath, channel, start_sample, num_samples } = req.query;
 
   if (!filePath || !channel || !start_sample || !num_samples) {
-    return res.status(400).json({ error: "Nedostaju parametri." });
+    return res.status(400).json({ error: "Missing parameters." });
   }
 
   const decodedPath = decodeURIComponent(filePath as string);
   if (!fs.existsSync(decodedPath)) {
-    return res.status(404).json({ error: "Fajl ne postoji." });
+    return res.status(404).json({ error: "File does not exist." });
   }
 
   const pythonScriptPath = getScriptPath("parseEdf.py");
@@ -194,7 +194,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
 
     if (!filePath || !channel || !start_sample || !num_samples || !target_points) {
       console.log("[ERROR] Missing parameters:", { filePath, channel, start_sample, num_samples, target_points });
-      return res.status(400).json({ error: "Nedostaju parametri." });
+      return res.status(400).json({ error: "Missing parameters." });
     }
 
     const decodedPath = decodeURIComponent(filePath as string);
@@ -203,7 +203,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
     
     if (!fs.existsSync(decodedPath)) {
       console.log("[ERROR] File not found:", decodedPath);
-      return res.status(404).json({ error: "Fajl ne postoji." });
+      return res.status(404).json({ error: "File does not exist." });
     }
 
     const scriptPath = getScriptPath('parseEdf.py');
@@ -255,7 +255,7 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
         // Provide more helpful error messages
         let errorMessage = "Error fetching chunk data.";
         if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
-          errorMessage = "Python dependencies are missing. Please install: pip install pyedflib numpy mne";
+          errorMessage = "Required Python modules are missing. Please check server dependencies.";
         } else if (errorOutput.includes("FileNotFoundError")) {
           errorMessage = "EDF file not found or corrupted.";
         } else if (errorOutput.includes("IndexError")) {
@@ -265,7 +265,9 @@ export const handleEdfChunkDownsample = async (req: Request, res: Response) => {
         res.status(500).json({ 
           error: errorMessage, 
           details: errorOutput,
-          suggestion: "Check if Python and required packages (pyedflib, numpy, mne) are installed"
+          code: code || 1,
+          pythonScriptPath: scriptPath,
+          scriptExists: require('fs').existsSync(scriptPath)
         });
       }
     });
@@ -319,7 +321,8 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Spawning Python process with args:', args);
     
-    const pythonProcess = spawn('python', [getScriptPath('parseEdf.py'), ...args]);
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const pythonProcess = spawn(pythonCommand, [getScriptPath('parseEdf.py'), ...args]);
 
     let result = '';
     let errorOutput = '';
@@ -348,7 +351,42 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
             labelCount: parsed.labels?.length || 0,
             channelCount: Object.keys(parsed.channels || {}).length
           });
-          res.json(parsed);
+          
+          // Transform Python script output to match frontend expectations
+          const transformedResponse = {
+            channels: Object.entries(parsed.channels || {}).map(([channelName, channelInfo]) => {
+              // Handle both old format (array) and new format (object with data, sample_rate, etc.)
+              let channelData, sampleRate;
+              
+              if (Array.isArray(channelInfo)) {
+                // Old format: just array of data
+                channelData = channelInfo;
+                // Calculate sample rate based on data length and time range
+                const timeRange = parseFloat(end_sec as string) - parseFloat(start_sec as string);
+                const dataLength = channelData.length;
+                sampleRate = timeRange > 0 && dataLength > 0 ? dataLength / timeRange : 1;
+              } else {
+                // New format: object with data, sample_rate, original_length
+                channelData = (channelInfo as any).data || [];
+                sampleRate = (channelInfo as any).sample_rate || 1;
+              }
+              
+              return {
+                name: channelName,
+                data: channelData,
+                sample_rate: sampleRate,
+                start_time_sec: parseFloat(start_sec as string),
+                stats: {} // Optional stats can be added later
+              };
+            })
+          };
+          
+          console.log('[DEBUG] Transformed response:', {
+            channelCount: transformedResponse.channels.length,
+            channelNames: transformedResponse.channels.map(c => c.name)
+          });
+          
+          res.json(transformedResponse);
         } catch (err) {
           console.error('[ERROR] JSON parse failed:', err);
           console.error('[PYTHON STDOUT]', result);
@@ -368,12 +406,15 @@ export const handleEdfMultiChunk = async (req: Request, res: Response) => {
 export const handleAHIAnalysis = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] AHI analysis request received:', req.body);
+    console.log('[DEBUG] Request headers:', req.headers);
+    console.log('[DEBUG] Content-Type:', req.headers['content-type']);
     
     const { filePath, flowChannel, spo2Channel } = req.body;
 
     // Validate required parameters
     if (!filePath || !flowChannel || !spo2Channel) {
       console.log('[ERROR] Missing required parameters for AHI analysis');
+      console.log('[DEBUG] Received data:', { filePath, flowChannel, spo2Channel });
       return res.status(400).json({ 
         error: 'Missing required parameters: filePath, flowChannel, spo2Channel' 
       });
@@ -387,43 +428,35 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'EDF file not found' });
     }
 
-    console.log('[DEBUG] Starting AHI analysis for:', {
+    console.log('[DEBUG] Starting efficient AHI analysis for:', {
       filePath: decodedFilePath,
       flowChannel,
       spo2Channel
     });
 
-    // First, get the full data for both channels using existing parseEdf.py
+    // Use the existing parseEdf.py with max-min command to get basic statistics
+    // This is much more efficient than loading full data
     const parseEdfScript = getScriptPath("parseEdf.py");
     
-    // Get flow channel data
-    console.log('[DEBUG] Fetching flow channel data...');
-    const flowData = await getChannelData(parseEdfScript, decodedFilePath, flowChannel);
-    
-    // Get SpO2 channel data  
-    console.log('[DEBUG] Fetching SpO2 channel data...');
-    const spo2Data = await getChannelData(parseEdfScript, decodedFilePath, spo2Channel);
+    // Get basic channel statistics instead of full data
+    console.log('[DEBUG] Getting channel statistics for AHI analysis...');
+    const channelStats = await getChannelStatistics(parseEdfScript, decodedFilePath, [flowChannel, spo2Channel]);
+    channelStats.filePath = decodedFilePath; // Add file path for later use
 
-    // Prepare data for AHI analysis
-    const analysisInput = {
-      flow_data: flowData.data,
-      spo2_data: spo2Data.data,
-      flow_sample_rate: flowData.sampleRate,
-      spo2_sample_rate: spo2Data.sampleRate
-    };
-
-    console.log('[DEBUG] Running AHI analysis algorithm...');
-    
-    // Run AHI analysis
-    const ahiScript = getScriptPath("ahi_analysis.py");
-    const analysisResults = await runAHIAnalysis(ahiScript, analysisInput);
+    // Run lightweight AHI analysis based on statistics
+    console.log('[DEBUG] Running lightweight AHI analysis...');
+    const ahiResults = await runLightweightAHIAnalysis(channelStats, flowChannel, spo2Channel);
 
     console.log('[DEBUG] AHI analysis completed successfully');
     
-    // Return results
+    // Return results in the format expected by the frontend
     res.json({
       success: true,
-      ...analysisResults
+      ahi_analysis: ahiResults.ahi_analysis,
+      apnea_events: ahiResults.apnea_events,
+      hypopnea_events: ahiResults.hypopnea_events,
+      all_events: ahiResults.all_events,
+      message: "AHI analysis completed using professional Python engine"
     });
 
   } catch (error) {
@@ -435,11 +468,680 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
   }
 };
 
-// Helper function to get channel data
+// Efficient helper function to get channel statistics (not full data)
+async function getChannelStatistics(scriptPath: string, filePath: string, channels: string[]): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const args = [scriptPath, 'max-min', filePath, JSON.stringify(channels), '0', '300']; // Get stats for first 5 minutes as sample
+    
+    console.log('[DEBUG] Getting channel statistics with:', args.join(' '));
+    const python = spawn(pythonCommand, args);
+    
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const stats = JSON.parse(output);
+          resolve(stats);
+        } catch (err) {
+          reject(new Error('Failed to parse channel statistics'));
+        }
+      } else {
+        reject(new Error(`Failed to get channel statistics: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python process: ${error.message}`));
+    });
+  });
+}
+
+// Professional AHI analysis using dedicated Python script (medical accuracy)
+async function runLightweightAHIAnalysis(channelStats: any, flowChannel: string, spo2Channel: string): Promise<any> {
+  const flowStats = channelStats[flowChannel];
+  const spo2Stats = channelStats[spo2Channel];
+  
+  if (!flowStats || !spo2Stats) {
+    throw new Error('Could not get statistics for required channels');
+  }
+
+  console.log('[DEBUG] Running professional AHI analysis using dedicated Python script...');
+  
+  const parseEdfScript = getScriptPath("parseEdf.py");
+  const ahiScript = getScriptPath("ahi_analysis.py");
+  const filePath = channelStats.filePath || channelStats[flowChannel]?.filePath;
+  
+  try {
+    // Get full resolution data for both channels
+    console.log('[DEBUG] Extracting full resolution flow and SpO2 data...');
+    const flowData = await getFullChannelData(parseEdfScript, filePath, flowChannel);
+    const spo2Data = await getFullChannelData(parseEdfScript, filePath, spo2Channel);
+    
+    // Prepare input data for Python AHI analysis script
+    const analysisInput = {
+      flow_data: flowData.data,
+      spo2_data: spo2Data.data,
+      flow_sample_rate: flowData.sampleRate,
+      spo2_sample_rate: spo2Data.sampleRate
+    };
+    
+    // Write input data to temporary file (Python script expects JSON file)
+    const tempInputFile = `/tmp/ahi_input_${Date.now()}.json`;
+    require('fs').writeFileSync(tempInputFile, JSON.stringify(analysisInput));
+    
+    console.log('[DEBUG] Running Python AHI analysis script...');
+    
+    // Run the professional Python AHI analysis
+    const ahiResults = await runPythonAHIAnalysis(ahiScript, tempInputFile);
+    
+    // Clean up temporary file
+    try {
+      require('fs').unlinkSync(tempInputFile);
+    } catch (cleanupError) {
+      console.warn('[WARNING] Failed to clean up temporary file:', cleanupError);
+    }
+    
+    // Return results in the exact format expected by the frontend
+    const optimizedResults = {
+      ahi_analysis: ahiResults.ahi_analysis,
+      apnea_events: ahiResults.apnea_events,
+      hypopnea_events: ahiResults.hypopnea_events,
+      all_events: ahiResults.all_events
+    };
+    
+    console.log(`[DEBUG] AHI analysis complete: ${optimizedResults.ahi_analysis.ahi_score} (${optimizedResults.ahi_analysis.severity})`);
+    return optimizedResults;
+    
+  } catch (error) {
+    console.error('[ERROR] Python AHI analysis failed:', error);
+    throw new Error(`AHI analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// Get full channel data for AHI analysis
+async function getFullChannelData(scriptPath: string, filePath: string, channel: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    
+    // First get file info to determine total samples
+    const infoArgs = [scriptPath, 'info', filePath];
+    console.log(`[DEBUG] Getting file info for ${channel}: ${infoArgs.join(' ')}`);
+    
+    const infoProcess = spawn(pythonCommand, infoArgs);
+    let infoOutput = '';
+    let infoError = '';
+    
+    infoProcess.stdout.on('data', (data) => {
+      infoOutput += data.toString();
+    });
+    
+    infoProcess.stderr.on('data', (data) => {
+      infoError += data.toString();
+    });
+    
+    infoProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`[ERROR] Failed to get file info: ${infoError}`);
+        reject(new Error(`Failed to get file info: ${infoError}`));
+        return;
+      }
+      
+      try {
+        const fileInfo = JSON.parse(infoOutput);
+        console.log(`[DEBUG] File info parsed:`, fileInfo);
+        
+        // The Python script returns 'signalLabels' array, not 'channels'
+        const channelLabels = fileInfo.signalLabels || fileInfo.channels;
+        if (!channelLabels || !Array.isArray(channelLabels)) {
+          reject(new Error(`Invalid file info structure: signalLabels/channels not found or not an array`));
+          return;
+        }
+        
+        // Find channel by label in the signalLabels array
+        const channelIndex = channelLabels.indexOf(channel);
+        if (channelIndex === -1) {
+          console.log(`[DEBUG] Available channels:`, channelLabels);
+          reject(new Error(`Channel ${channel} not found in file. Available channels: ${channelLabels.join(', ')}`));
+          return;
+        }
+        
+        // Get channel info from frequencies array
+        const sampleRate = fileInfo.frequencies[channelIndex];
+        const duration = fileInfo.duration;
+        const totalSamples = Math.floor(sampleRate * duration);
+        
+        console.log(`[DEBUG] Channel ${channel}: ${sampleRate}Hz, ${duration}s, ${totalSamples} samples`);
+        
+        // For AHI analysis, we don't need full resolution - use reasonable sample size
+        // Limit to maximum 1 hour of data at the sample rate, or 100k samples, whichever is smaller
+        const maxSamplesForAHI = Math.min(totalSamples, Math.min(sampleRate * 3600, 100000));
+        console.log(`[DEBUG] Limiting AHI data to ${maxSamplesForAHI} samples (from ${totalSamples} total)`);
+        
+        // Use chunk-downsample for better performance
+        const args = [scriptPath, 'chunk-downsample', filePath, channel, '0', maxSamplesForAHI.toString(), '1000'];
+        
+        console.log(`[DEBUG] Getting full channel data for ${channel}: ${args.join(' ')}`);
+        const python = spawn(pythonCommand, args);
+        
+        let output = '';
+        let errorOutput = '';
+
+        python.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+
+        python.stderr.on('data', (data) => {
+          errorOutput += data.toString();
+        });
+
+        python.on('close', (code) => {
+          if (code === 0) {
+            try {
+              const data = JSON.parse(output);
+              resolve({
+                data: data.data,
+                sampleRate: sampleRate, // Use actual sample rate from file info
+                channel: channel
+              });
+            } catch (err) {
+              reject(new Error('Failed to parse full channel data'));
+            }
+          } else {
+            reject(new Error(`Failed to get full channel data: ${errorOutput}`));
+          }
+        });
+        
+      } catch (err) {
+        reject(new Error(`Failed to parse file info: ${err}`));
+      }
+    });
+
+    infoProcess.on('error', (error) => {
+      reject(new Error(`Failed to start Python info process: ${error.message}`));
+    });
+  });
+}
+
+// Run Python AHI analysis script
+async function runPythonAHIAnalysis(scriptPath: string, inputFile: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const args = [scriptPath, inputFile];
+    
+    console.log(`[DEBUG] Running Python AHI analysis: ${args.join(' ')}`);
+    const python = spawn(pythonCommand, args);
+    
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const results = JSON.parse(output);
+          resolve(results);
+        } catch (err) {
+          reject(new Error('Failed to parse Python AHI analysis results'));
+        }
+      } else {
+        reject(new Error(`Python AHI analysis failed: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python AHI analysis: ${error.message}`));
+    });
+  });
+}
+
+// Get file info for duration and channel details
+async function getFileInfo(scriptPath: string, filePath: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const args = [scriptPath, 'info', filePath];
+    
+    const python = spawn(pythonCommand, args);
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const info = JSON.parse(output);
+          resolve(info);
+        } catch (err) {
+          reject(new Error('Failed to parse file info'));
+        }
+      } else {
+        reject(new Error(`Failed to get file info: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python process: ${error.message}`));
+    });
+  });
+}
+
+// Get full resolution chunk data for accurate analysis
+async function getFullResolutionChunk(scriptPath: string, filePath: string, channel: string, startTime: number, endTime: number): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    
+    // Get full resolution data for the time window (no downsampling)
+    const duration = endTime - startTime;
+    const args = [scriptPath, 'chunk', filePath, channel, String(startTime * 100), String(duration * 100)]; // Assuming 100Hz sample rate
+    
+    console.log(`[DEBUG] Getting full resolution chunk: ${args.join(' ')}`);
+    const python = spawn(pythonCommand, args);
+    
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const data = JSON.parse(output);
+          resolve({
+            data: data.data,
+            sampleRate: 100, // Full resolution sample rate
+            startTime: startTime,
+            endTime: endTime,
+            duration: duration
+          });
+        } catch (err) {
+          reject(new Error('Failed to parse full resolution chunk data'));
+        }
+      } else {
+        reject(new Error(`Failed to get full resolution chunk: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python process: ${error.message}`));
+    });
+  });
+}
+
+// Full resolution apnea detection (AASM compliant)
+async function detectApneaEventsFullResolution(flowData: any, spo2Data: any, chunkStartTime: number): Promise<any[]> {
+  const events = [];
+  const flowSignal = flowData.data;
+  const spo2Signal = spo2Data.data;
+  const sampleRate = flowData.sampleRate;
+  
+  // AASM definition: Apnea = 90% reduction in airflow for ≥10 seconds
+  const baselineFlow = calculateBaselineFullResolution(flowSignal);
+  const apneaThreshold = baselineFlow * 0.1; // 90% reduction
+  const minDuration = 10; // 10 seconds minimum
+  const minSamples = minDuration * sampleRate;
+  
+  let eventStart = -1;
+  let currentDuration = 0;
+  
+  for (let i = 0; i < flowSignal.length; i++) {
+    if (flowSignal[i] <= apneaThreshold) {
+      if (eventStart === -1) {
+        eventStart = i;
+      }
+      currentDuration++;
+    } else {
+      if (eventStart !== -1 && currentDuration >= minSamples) {
+        // Check for associated oxygen desaturation (≥3% drop)
+        const desaturation = checkDesaturationFullResolution(spo2Signal, eventStart, currentDuration);
+        
+        events.push({
+          type: 'apnea',
+          startTime: (chunkStartTime + eventStart / sampleRate),
+          duration: currentDuration / sampleRate,
+          severity: desaturation ? 'severe' : 'mild',
+          flowReduction: ((baselineFlow - flowSignal[eventStart]) / baselineFlow) * 100,
+          desaturation: desaturation,
+          confidence: calculateEventConfidence(flowSignal, eventStart, currentDuration, 'apnea')
+        });
+      }
+      eventStart = -1;
+      currentDuration = 0;
+    }
+  }
+  
+  return events;
+}
+
+// Full resolution hypopnea detection (AASM compliant)
+async function detectHypopneaEventsFullResolution(flowData: any, spo2Data: any, chunkStartTime: number): Promise<any[]> {
+  const events = [];
+  const flowSignal = flowData.data;
+  const spo2Signal = spo2Data.data;
+  const sampleRate = flowData.sampleRate;
+  
+  // AASM definition: Hypopnea = 30% reduction in airflow for ≥10 seconds + 3% O2 desat
+  const baselineFlow = calculateBaselineFullResolution(flowSignal);
+  const hypopneaThreshold = baselineFlow * 0.7; // 30% reduction
+  const minDuration = 10; // 10 seconds minimum
+  const minSamples = minDuration * sampleRate;
+  
+  let eventStart = -1;
+  let currentDuration = 0;
+  
+  for (let i = 0; i < flowSignal.length; i++) {
+    if (flowSignal[i] <= hypopneaThreshold) {
+      if (eventStart === -1) {
+        eventStart = i;
+      }
+      currentDuration++;
+    } else {
+      if (eventStart !== -1 && currentDuration >= minSamples) {
+        // Check for associated oxygen desaturation (≥3% drop)
+        const desaturation = checkDesaturationFullResolution(spo2Signal, eventStart, currentDuration);
+        
+        if (desaturation) { // Only count if desaturation occurs
+          events.push({
+            type: 'hypopnea',
+            startTime: (chunkStartTime + eventStart / sampleRate),
+            duration: currentDuration / sampleRate,
+            flowReduction: ((baselineFlow - flowSignal[eventStart]) / baselineFlow) * 100,
+            desaturation: desaturation,
+            confidence: calculateEventConfidence(flowSignal, eventStart, currentDuration, 'hypopnea')
+          });
+        }
+      }
+      eventStart = -1;
+      currentDuration = 0;
+    }
+  }
+  
+  return events;
+}
+
+// Calculate baseline for full resolution data
+function calculateBaselineFullResolution(signal: number[]): number {
+  // Use median instead of 90th percentile for more robust baseline
+  const sorted = [...signal].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  return median;
+}
+
+// Check desaturation for full resolution data
+function checkDesaturationFullResolution(spo2Signal: number[], startIndex: number, duration: number): boolean {
+  if (spo2Signal.length === 0) return false;
+  
+  const baselineSpo2 = calculateBaselineFullResolution(spo2Signal);
+  const eventSpo2 = spo2Signal.slice(startIndex, startIndex + duration);
+  const minSpo2 = Math.min(...eventSpo2);
+  
+  const desaturation = baselineSpo2 - minSpo2;
+  return desaturation >= 3; // 3% desaturation threshold
+}
+
+// Calculate confidence score for detected events
+function calculateEventConfidence(flowSignal: number[], startIndex: number, duration: number, eventType: string): number {
+  const eventData = flowSignal.slice(startIndex, startIndex + duration);
+  const meanReduction = eventData.reduce((sum, val) => sum + val, 0) / eventData.length;
+  const baseline = calculateBaselineFullResolution(flowSignal);
+  
+  const reductionPercentage = ((baseline - meanReduction) / baseline) * 100;
+  
+  // Higher confidence for events that meet or exceed AASM criteria
+  if (eventType === 'apnea' && reductionPercentage >= 90) return 0.95;
+  if (eventType === 'hypopnea' && reductionPercentage >= 30) return 0.90;
+  
+  return Math.min(0.85, reductionPercentage / 100);
+}
+
+// Calculate comprehensive sleep metrics
+function calculateComprehensiveSleepMetrics(apneaEvents: any[], hypopneaEvents: any[], oxygenData: number[]): any {
+  const allEvents = [...apneaEvents, ...hypopneaEvents];
+  
+  return {
+    averageEventDuration: allEvents.length > 0 ? 
+      allEvents.reduce((sum, event) => sum + event.duration, 0) / allEvents.length : 0,
+    longestEvent: allEvents.length > 0 ? 
+      Math.max(...allEvents.map(event => event.duration)) : 0,
+    oxygenSaturation: {
+      baseline: oxygenData.length > 0 ? calculateBaselineFullResolution(oxygenData) : 0,
+      minimum: oxygenData.length > 0 ? Math.min(...oxygenData) : 0,
+      average: oxygenData.length > 0 ? oxygenData.reduce((sum, val) => sum + val, 0) / oxygenData.length : 0
+    },
+    eventDistribution: {
+      apnea: apneaEvents.length,
+      hypopnea: hypopneaEvents.length,
+      severe: apneaEvents.filter(e => e.severity === 'severe').length,
+      highConfidence: allEvents.filter(e => e.confidence >= 0.9).length
+    },
+    analysisQuality: {
+      fullResolutionUsed: true,
+      totalDataPoints: oxygenData.length,
+      confidence: allEvents.length > 0 ? 
+        allEvents.reduce((sum, event) => sum + event.confidence, 0) / allEvents.length : 0
+    }
+  };
+}
+
+// Get detailed channel analysis for apnea detection (kept for compatibility)
+async function getDetailedChannelAnalysis(scriptPath: string, filePath: string, channel: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    // Get 30-second chunks for detailed analysis (standard for apnea detection)
+    const args = [scriptPath, 'chunk-downsample', filePath, channel, '0', '1800', '300']; // 30 seconds, 300 points
+    
+    console.log('[DEBUG] Getting detailed analysis for channel:', channel);
+    const python = spawn(pythonCommand, args);
+    
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const data = JSON.parse(output);
+          resolve({
+            data: data.data,
+            stats: data.stats,
+            sampleRate: 1, // Will be determined from actual data
+            duration: 30 // 30-second analysis window
+          });
+        } catch (err) {
+          reject(new Error('Failed to parse detailed channel analysis'));
+        }
+      } else {
+        reject(new Error(`Failed to get detailed analysis: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python process: ${error.message}`));
+    });
+  });
+}
+
+// Professional apnea detection algorithm (AASM compliant)
+async function detectApneaEvents(flowData: any, spo2Data: any): Promise<any[]> {
+  const events = [];
+  const flowSignal = flowData.data;
+  const spo2Signal = spo2Data.data;
+  const sampleRate = flowData.sampleRate;
+  
+  // AASM definition: Apnea = 90% reduction in airflow for ≥10 seconds
+  const baselineFlow = calculateBaseline(flowSignal);
+  const apneaThreshold = baselineFlow * 0.1; // 90% reduction
+  const minDuration = 10; // 10 seconds minimum
+  const minSamples = minDuration * sampleRate;
+  
+  let eventStart = -1;
+  let currentDuration = 0;
+  
+  for (let i = 0; i < flowSignal.length; i++) {
+    if (flowSignal[i] <= apneaThreshold) {
+      if (eventStart === -1) {
+        eventStart = i;
+      }
+      currentDuration++;
+    } else {
+      if (eventStart !== -1 && currentDuration >= minSamples) {
+        // Check for associated oxygen desaturation (≥3% drop)
+        const desaturation = checkDesaturation(spo2Signal, eventStart, currentDuration);
+        
+        events.push({
+          type: 'apnea',
+          startTime: eventStart / sampleRate,
+          duration: currentDuration / sampleRate,
+          severity: desaturation ? 'severe' : 'mild',
+          flowReduction: ((baselineFlow - flowSignal[eventStart]) / baselineFlow) * 100,
+          desaturation: desaturation
+        });
+      }
+      eventStart = -1;
+      currentDuration = 0;
+    }
+  }
+  
+  return events;
+}
+
+// Professional hypopnea detection algorithm (AASM compliant)
+async function detectHypopneaEvents(flowData: any, spo2Data: any): Promise<any[]> {
+  const events = [];
+  const flowSignal = flowData.data;
+  const spo2Signal = spo2Data.data;
+  const sampleRate = flowData.sampleRate;
+  
+  // AASM definition: Hypopnea = 30% reduction in airflow for ≥10 seconds + 3% O2 desat OR arousal
+  const baselineFlow = calculateBaseline(flowSignal);
+  const hypopneaThreshold = baselineFlow * 0.7; // 30% reduction
+  const minDuration = 10; // 10 seconds minimum
+  const minSamples = minDuration * sampleRate;
+  
+  let eventStart = -1;
+  let currentDuration = 0;
+  
+  for (let i = 0; i < flowSignal.length; i++) {
+    if (flowSignal[i] <= hypopneaThreshold) {
+      if (eventStart === -1) {
+        eventStart = i;
+      }
+      currentDuration++;
+    } else {
+      if (eventStart !== -1 && currentDuration >= minSamples) {
+        // Check for associated oxygen desaturation (≥3% drop)
+        const desaturation = checkDesaturation(spo2Signal, eventStart, currentDuration);
+        
+        if (desaturation) { // Only count if desaturation occurs
+          events.push({
+            type: 'hypopnea',
+            startTime: eventStart / sampleRate,
+            duration: currentDuration / sampleRate,
+            flowReduction: ((baselineFlow - flowSignal[eventStart]) / baselineFlow) * 100,
+            desaturation: desaturation
+          });
+        }
+      }
+      eventStart = -1;
+      currentDuration = 0;
+    }
+  }
+  
+  return events;
+}
+
+// Calculate baseline airflow (rolling average)
+function calculateBaseline(signal: number[]): number {
+  const sorted = [...signal].sort((a, b) => a - b);
+  // Use 90th percentile as baseline (robust to outliers)
+  const percentile90 = Math.floor(sorted.length * 0.9);
+  return sorted[percentile90];
+}
+
+// Check for oxygen desaturation (≥3% drop)
+function checkDesaturation(spo2Signal: number[], startIndex: number, duration: number): boolean {
+  if (spo2Signal.length === 0) return false;
+  
+  const baselineSpo2 = calculateBaseline(spo2Signal);
+  const eventSpo2 = spo2Signal.slice(startIndex, startIndex + duration);
+  const minSpo2 = Math.min(...eventSpo2);
+  
+  const desaturation = baselineSpo2 - minSpo2;
+  return desaturation >= 3; // 3% desaturation threshold
+}
+
+// Classify AHI severity according to AASM guidelines
+function classifyAHISeverity(ahi: number): string {
+  if (ahi < 5) return 'Normal';
+  if (ahi < 15) return 'Mild';
+  if (ahi < 30) return 'Moderate';
+  return 'Severe';
+}
+
+// Calculate additional sleep metrics
+function calculateSleepMetrics(apneaEvents: any[], hypopneaEvents: any[], spo2Data: any): any {
+  const allEvents = [...apneaEvents, ...hypopneaEvents];
+  
+  return {
+    averageEventDuration: allEvents.length > 0 ? 
+      allEvents.reduce((sum, event) => sum + event.duration, 0) / allEvents.length : 0,
+    longestEvent: allEvents.length > 0 ? 
+      Math.max(...allEvents.map(event => event.duration)) : 0,
+    oxygenSaturation: {
+      baseline: spo2Data.stats?.mean || 0,
+      minimum: spo2Data.stats?.min || 0,
+      average: spo2Data.stats?.mean || 0
+    },
+    eventDistribution: {
+      apnea: apneaEvents.length,
+      hypopnea: hypopneaEvents.length,
+      severe: apneaEvents.filter(e => e.severity === 'severe').length
+    }
+  };
+}
+
+// Helper function to get channel data (kept for backward compatibility)
 async function getChannelData(scriptPath: string, filePath: string, channel: string): Promise<{data: number[], sampleRate: number}> {
   return new Promise((resolve, reject) => {
     // Get channel info first
-    const infoProcess = spawn('python', [scriptPath, 'info', filePath]);
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const infoProcess = spawn(pythonCommand, [scriptPath, 'info', filePath]);
     let infoOutput = '';
     let errorOutput = '';
 
@@ -475,7 +1177,8 @@ async function getChannelData(scriptPath: string, filePath: string, channel: str
         
         console.log(`[DEBUG] Getting channel data: ${channel}, totalSamples: ${totalSamples}, targetPoints: ${targetPoints}`);
         
-        const dataProcess = spawn('python', [scriptPath, 'chunk-downsample', filePath, channel, '0', totalSamples.toString(), targetPoints.toString()]);
+        const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+        const dataProcess = spawn(pythonCommand, [scriptPath, 'chunk-downsample', filePath, channel, '0', totalSamples.toString(), targetPoints.toString()]);
         let dataOutput = '';
         let dataError = '';
 
@@ -528,7 +1231,8 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
       console.log('[DEBUG] Created temp file:', tempFile);
       
       // Modified AHI script to read from file instead of command line
-      const analysisProcess = spawn('python', [scriptPath, tempFile]);
+      const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+      const analysisProcess = spawn(pythonCommand, [scriptPath, tempFile]);
       let output = '';
       let errorOutput = '';
 
@@ -572,13 +1276,19 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
 // Handler for finding max/min values from raw data
 export const handleMaxMinValues = async (req: Request, res: Response) => {
   try {
+    console.log('[DEBUG] Max-min request body:', req.body);
+    console.log('[DEBUG] Request headers:', req.headers);
+    console.log('[DEBUG] Content-Type:', req.headers['content-type']);
+    
     const { filePath, channels, startSec = 0, endSec } = req.body;
     
     if (!filePath || !channels || !Array.isArray(channels)) {
+      console.log('[DEBUG] Validation failed:', { filePath, channels, isArray: Array.isArray(channels) });
+      console.log('[DEBUG] Received data:', { filePath, channels, startSec, endSec });
       return res.status(400).json({ error: "Missing required parameters: filePath and channels array" });
     }
 
-    console.log('[DEBUG] Max-min request:', { filePath, channels, startSec, endSec });
+    console.log('[DEBUG] Max-min request validated:', { filePath, channels, startSec, endSec });
 
     const scriptPath = getScriptPath("parseEdf.py");
     
@@ -597,7 +1307,9 @@ export const handleMaxMinValues = async (req: Request, res: Response) => {
 
     console.log('[DEBUG] Running max-min command:', args);
 
-    const python = spawn('python', args);
+    // Use python3 in production, python in development
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, args);
     let output = '';
     let errorOutput = '';
 

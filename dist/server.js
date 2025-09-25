@@ -13,31 +13,69 @@ const cleanup_config_1 = __importDefault(require("./config/cleanup.config"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
+const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 // Configure CORS for development and production
 const corsOptions = {
-    origin: process.env.NODE_ENV === 'production'
-        ? [
-            'https://somnoviz.netlify.app',
-            'https://main--somnoviz.netlify.app',
-            /https:\/\/.*--somnoviz\.netlify\.app$/,
-            /https:\/\/.*\.netlify\.app$/
-        ] // Production origins - your Netlify URL
-        : ["http://localhost:5173", "http://localhost:3000"], // Development origins
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) {
+            console.log(`[CORS] No origin provided - allowing`);
+            return callback(null, true);
+        }
+        const allowedOrigins = process.env.NODE_ENV === 'production'
+            ? [
+                'https://somnoviz.netlify.app',
+                'https://main--somnoviz.netlify.app',
+                /https:\/\/.*--somnoviz\.netlify\.app$/,
+                /https:\/\/.*\.netlify\.app$/,
+                /https:\/\/.*\.vercel\.app$/,
+                /https:\/\/.*\.github\.io$/,
+                // Additional fallback patterns for Netlify (including new URL)
+                /^https:\/\/[a-f0-9]{24}--somnoviz\.netlify\.app$/,
+                /^https:\/\/.*\.netlify\.app$/,
+                // Specific pattern for the new URL
+                'https://68d18920cadb7f00080116a2--somnoviz.netlify.app'
+            ]
+            : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
+        console.log(`[CORS] Checking origin: ${origin}`);
+        console.log(`[CORS] NODE_ENV: ${process.env.NODE_ENV}`);
+        console.log(`[CORS] Allowed origins:`, allowedOrigins);
+        const isAllowed = allowedOrigins.some(allowedOrigin => {
+            if (typeof allowedOrigin === 'string') {
+                const match = origin === allowedOrigin;
+                console.log(`[CORS] String comparison: ${origin} === ${allowedOrigin} = ${match}`);
+                return match;
+            }
+            else {
+                const match = allowedOrigin.test(origin);
+                console.log(`[CORS] Regex test: ${allowedOrigin} against ${origin} = ${match}`);
+                return match;
+            }
+        });
+        console.log(`[CORS] Final result: Origin ${origin} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
+        if (isAllowed) {
+            callback(null, true);
+        }
+        else {
+            console.log(`[CORS ERROR] Origin ${origin} not allowed. Allowed origins:`, allowedOrigins);
+            callback(new Error(`Not allowed by CORS: ${origin}`));
+        }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: false, // Changed to false to avoid CORS credential issues
-    optionsSuccessStatus: 200, // For legacy browser support
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    credentials: false,
+    optionsSuccessStatus: 200,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar']
 };
 app.use((0, cors_1.default)(corsOptions));
 // Increase request size limits for large EDF files
 app.use(express_1.default.json({ limit: '500mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '500mb' }));
-// Add request timeout middleware (5 minutes)
+// Add request timeout middleware (10 minutes for Render free tier)
 app.use((req, res, next) => {
-    // Set timeout to 5 minutes for all requests
-    req.setTimeout(300000); // 5 minutes
-    res.setTimeout(300000); // 5 minutes
+    // Set timeout to 10 minutes for all requests (Render free tier is slower)
+    req.setTimeout(600000); // 10 minutes
+    res.setTimeout(600000); // 10 minutes
     next();
 });
 app.get('/', (_req, res) => {
@@ -51,6 +89,15 @@ app.get('/test', (_req, res) => {
         pythonAvailable: true // We'll test this
     });
 });
+// Add health check endpoint
+app.get('/api/health', (_req, res) => {
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        server: 'Render',
+        timeout: '10 minutes'
+    });
+});
 // Add Python test endpoint
 app.get('/test-python', async (_req, res) => {
     try {
@@ -59,7 +106,9 @@ app.get('/test-python', async (_req, res) => {
         const scriptPath = process.env.NODE_ENV === 'production'
             ? path.resolve(process.cwd(), 'src/scripts/test_python.py')
             : path.resolve(__dirname, 'scripts/test_python.py');
-        const python = spawn('python', [scriptPath]);
+        // Use python3 in production, python in development
+        const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+        const python = spawn(pythonCommand, [scriptPath]);
         let output = '';
         let errorOutput = '';
         python.stdout.on('data', (data) => {
@@ -151,14 +200,24 @@ app.post('/api/cleanup/manual', async (_req, res) => {
 });
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+    try {
+        const fs = require('fs');
+        if (!fs.existsSync(UPLOAD_DIR)) {
+            fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+            console.log(`[INIT] Created upload directory at ${UPLOAD_DIR}`);
+        }
+    }
+    catch (e) {
+        console.error('[INIT] Failed to ensure upload directory exists:', e);
+    }
     // Start the automatic file cleanup service if enabled
     if (cleanup_config_1.default.enabled) {
         console.log(`[FileCleanup] Configuration:`);
         console.log(`  - Max file age: ${cleanup_config_1.default.maxAgeHours} hours`);
         console.log(`  - Cleanup interval: ${cleanup_config_1.default.intervalMinutes} minutes`);
         console.log(`  - Upload directory: ${cleanup_config_1.default.uploadDir}`);
-        // Initialize service with config
-        fileCleanupService_1.fileCleanupService.updateConfig(cleanup_config_1.default.maxAgeHours);
+        // Initialize service with config (propagate uploadDir and maxAgeHours)
+        fileCleanupService_1.fileCleanupService.updateConfig(cleanup_config_1.default.maxAgeHours, cleanup_config_1.default.uploadDir);
         fileCleanupService_1.fileCleanupService.start(cleanup_config_1.default.intervalMinutes);
     }
     else {

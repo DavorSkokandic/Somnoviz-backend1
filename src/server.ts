@@ -14,18 +14,62 @@ const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 // Configure CORS for development and production
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' 
-    ? [
-        'https://somnoviz.netlify.app',
-        'https://main--somnoviz.netlify.app', 
-        /https:\/\/.*--somnoviz\.netlify\.app$/,
-        /https:\/\/.*\.netlify\.app$/
-      ] // Production origins - your Netlify URL
-    : ["http://localhost:5173", "http://localhost:3000"], // Development origins
+  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      console.log(`[CORS] No origin provided - allowing`);
+      return callback(null, true);
+    }
+    
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? [
+          'https://somnoviz.netlify.app',
+          'https://main--somnoviz.netlify.app',
+          /https:\/\/.*--somnoviz\.netlify\.app$/,
+          /https:\/\/.*\.netlify\.app$/,
+          /https:\/\/.*\.vercel\.app$/,
+          /https:\/\/.*\.github\.io$/,
+          // Additional fallback patterns for Netlify (including new URL)
+          /^https:\/\/[a-f0-9]{24}--somnoviz\.netlify\.app$/,
+          /^https:\/\/.*\.netlify\.app$/,
+          // Specific pattern for the new URL
+          'https://68d18920cadb7f00080116a2--somnoviz.netlify.app',
+          // Allow localhost for development testing
+          'http://localhost:5173',
+          'http://localhost:3000',
+          'http://localhost:5000'
+        ]
+      : ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000"];
+    
+    console.log(`[CORS] Checking origin: ${origin}`);
+    console.log(`[CORS] NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log(`[CORS] Allowed origins:`, allowedOrigins);
+    
+    const isAllowed = allowedOrigins.some(allowedOrigin => {
+      if (typeof allowedOrigin === 'string') {
+        const match = origin === allowedOrigin;
+        console.log(`[CORS] String comparison: ${origin} === ${allowedOrigin} = ${match}`);
+        return match;
+      } else {
+        const match = allowedOrigin.test(origin);
+        console.log(`[CORS] Regex test: ${allowedOrigin} against ${origin} = ${match}`);
+        return match;
+      }
+    });
+    
+    console.log(`[CORS] Final result: Origin ${origin} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'}`);
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log(`[CORS ERROR] Origin ${origin} not allowed. Allowed origins:`, allowedOrigins);
+      callback(new Error(`Not allowed by CORS: ${origin}`));
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: false, // Changed to false to avoid CORS credential issues
-  optionsSuccessStatus: 200, // For legacy browser support
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false,
+  optionsSuccessStatus: 200,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
   exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar']
 };
 
