@@ -1351,6 +1351,82 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
 };
 
 // Handler for finding max/min values from raw data
+export const handleFullStats = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channels } = req.body;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "File path is required" });
+    }
+
+    if (!channels || !Array.isArray(channels) || channels.length === 0) {
+      return res.status(400).json({ error: "Channels array is required" });
+    }
+
+    const scriptPath = path.join(__dirname, "../scripts/parseEdf.py");
+    if (!fs.existsSync(scriptPath)) {
+      console.error("[ERROR] Python script not found:", scriptPath);
+      return res.status(500).json({ error: "Python script not found. Please check the installation." });
+    }
+
+    const args = [scriptPath, "full-stats", filePath, JSON.stringify(channels)];
+    console.log("[DEBUG] Executing Python full-stats script with:", args.join(" "));
+
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, args);
+
+    let output = "";
+    let errorOutput = "";
+
+    python.stdout.on("data", (data) => {
+      output += data.toString();
+      console.log("[PYTHON STDOUT]", data.toString());
+    });
+
+    python.stderr.on("data", (data) => {
+      const err = data.toString();
+      errorOutput += err;
+      console.error("[PYTHON STDERR]", err);
+    });
+
+    python.on("close", (code) => {
+      console.log("[DEBUG] Python process exited with code:", code);
+      if (code === 0) {
+        try {
+          const parsed = JSON.parse(output);
+          console.log("[DEBUG] Successfully parsed Python full-stats output");
+          res.json(parsed);
+        } catch (err) {
+          console.error("[ERROR] JSON parse failed:", err);
+          console.error("[PYTHON STDOUT]", output);
+          res.status(500).json({ error: "Failed to parse response from Python script." });
+        }
+      } else {
+        console.error("[ERROR] Python error:", errorOutput);
+        
+        let errorMessage = "Error calculating full file statistics.";
+        if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
+          errorMessage = "Required Python modules are missing. Please check server dependencies.";
+        } else if (errorOutput.includes("FileNotFoundError")) {
+          errorMessage = "EDF file not found or corrupted.";
+        } else if (errorOutput.includes("MemoryError")) {
+          errorMessage = "File too large for statistics calculation. Consider using a smaller file or more memory.";
+        }
+        
+        res.status(500).json({ 
+          error: errorMessage, 
+          details: errorOutput,
+          code: code || 1
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error("[ERROR] Exception in handleFullStats:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 export const handleMaxMinValues = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] Max-min request body:', req.body);
