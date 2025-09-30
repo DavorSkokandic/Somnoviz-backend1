@@ -26,7 +26,7 @@ class AHIAnalyzer:
     """Main class for AHI analysis and event detection."""
     
     def __init__(self, flow_data: np.ndarray, spo2_data: np.ndarray, 
-                 flow_sample_rate: float, spo2_sample_rate: float):
+                 flow_sample_rate: float, spo2_sample_rate: float, global_baseline: float = None):
         """
         Initialize the AHI analyzer.
         
@@ -35,11 +35,13 @@ class AHIAnalyzer:
             spo2_data: SpO2 signal data (numpy array)
             flow_sample_rate: Sampling rate of flow signal (Hz)
             spo2_sample_rate: Sampling rate of SpO2 signal (Hz)
+            global_baseline: Global baseline flow value (optional)
         """
         self.flow_data = np.array(flow_data)
         self.spo2_data = np.array(spo2_data)
         self.flow_sr = flow_sample_rate
         self.spo2_sr = spo2_sample_rate
+        self.global_baseline = global_baseline
         
         # Clinical parameters (configurable)
         self.apnea_threshold = 0.1  # 10% of baseline (90% reduction)
@@ -50,6 +52,8 @@ class AHIAnalyzer:
         
         print(f"[AHI] Initialized with Flow: {len(flow_data)} samples @ {flow_sample_rate}Hz", file=sys.stderr)
         print(f"[AHI] SpO2: {len(spo2_data)} samples @ {spo2_sample_rate}Hz", file=sys.stderr)
+        print(f"[AHI] Flow data range: {np.min(flow_data):.3f} to {np.max(flow_data):.3f}", file=sys.stderr)
+        print(f"[AHI] SpO2 data range: {np.min(spo2_data):.3f} to {np.max(spo2_data):.3f}", file=sys.stderr)
     
     def calculate_baseline_flow(self, window_minutes: int = 5) -> float:
         """
@@ -61,6 +65,12 @@ class AHIAnalyzer:
         Returns:
             Baseline flow value
         """
+        # Use global baseline if provided (from chunked analysis)
+        if self.global_baseline is not None:
+            print(f"[AHI] Using global baseline: {self.global_baseline:.3f}", file=sys.stderr)
+            return self.global_baseline
+        
+        # Otherwise calculate local baseline
         window_samples = int(window_minutes * 60 * self.flow_sr)
         
         # Use median of upper 50% of values to avoid including apneas in baseline
@@ -69,7 +79,7 @@ class AHIAnalyzer:
         baseline_candidates = flow_abs[flow_abs >= upper_50_percentile]
         baseline = np.median(baseline_candidates)
         
-        print(f"[AHI] Calculated baseline flow: {baseline:.3f}", file=sys.stderr)
+        print(f"[AHI] Calculated local baseline flow: {baseline:.3f}", file=sys.stderr)
         return baseline
     
     def detect_apnea_events(self) -> List[Dict]:
@@ -82,6 +92,8 @@ class AHIAnalyzer:
         baseline = self.calculate_baseline_flow()
         threshold = baseline * self.apnea_threshold
         
+        print(f"[AHI] Apnea detection - Baseline: {baseline:.3f}, Threshold: {threshold:.3f} ({self.apnea_threshold*100:.0f}% of baseline)", file=sys.stderr)
+        
         # Smooth the signal to reduce noise
         # Calculate appropriate filter size (at least 1, and reasonable for the sample rate)
         filter_size = max(1, int(self.flow_sr * 2))  # 2-second window minimum
@@ -93,6 +105,8 @@ class AHIAnalyzer:
         
         # Find regions below threshold
         below_threshold = flow_smooth < threshold
+        below_count = np.sum(below_threshold)
+        print(f"[AHI] Found {below_count} samples below threshold ({below_count/self.flow_sr:.1f}s total)", file=sys.stderr)
         
         # Find continuous regions
         events = []
@@ -369,9 +383,10 @@ def main():
         spo2_data = input_data['spo2_data']
         flow_sample_rate = input_data['flow_sample_rate']
         spo2_sample_rate = input_data['spo2_sample_rate']
+        global_baseline = input_data.get('global_baseline', None)
         
         # Create analyzer and run analysis
-        analyzer = AHIAnalyzer(flow_data, spo2_data, flow_sample_rate, spo2_sample_rate)
+        analyzer = AHIAnalyzer(flow_data, spo2_data, flow_sample_rate, spo2_sample_rate, global_baseline)
         results = analyzer.analyze()
         
         # Output results as JSON
