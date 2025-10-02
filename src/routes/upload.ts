@@ -8,6 +8,7 @@ import {handleEdfChunkDownsample} from "../controllers/uploadController";
 import { handleEdfMultiChunk } from "../controllers/uploadController";
 import { handleAHIAnalysis } from "../controllers/uploadController";
 import { handleMaxMinValues } from "../controllers/uploadController";
+import { handleFullStats } from "../controllers/uploadController";
 
 const router = express.Router();
 
@@ -59,6 +60,11 @@ router.post('/ahi-analysis', (req, res, next) => {
 // Max/Min Values endpoint - POST because we need to send channel names in body
 router.post('/max-min-values', (req, res, next) => {
   Promise.resolve(handleMaxMinValues(req, res)).catch(next);
+});
+
+// Full File Statistics endpoint - POST because we need to send channel names in body
+router.post('/full-stats', (req, res, next) => {
+  Promise.resolve(handleFullStats(req, res)).catch(next);
 });
 
 export default router;

@@ -186,6 +186,66 @@ def get_chunk(file_path, channel, start_sample, num_samples, max_points=None):
         traceback.print_exc(file=sys.stderr)
         error_response(str(e))
 
+def calculate_full_file_stats(file_path, channels):
+    """Calculate statistics on the entire file for maximum accuracy."""
+    import numpy as np
+    try:
+        print(f"[DEBUG] Calculating full file statistics: {file_path}", file=sys.stderr)
+        print(f"[DEBUG] Channels: {channels}", file=sys.stderr)
+
+        response = {"channels": {}}
+
+        with EdfReader(file_path) as f:
+            available_channels = f.getSignalLabels()
+            print(f"[DEBUG] Available channels: {available_channels[:5]}...", file=sys.stderr)
+
+            for ch in channels:
+                try:
+                    # Find channel
+                    if ch not in available_channels:
+                        normalized = { name.strip().lower(): idx for idx, name in enumerate(available_channels) }
+                        key = ch.strip().lower()
+                        if key in normalized:
+                            ch_idx = normalized[key]
+                            ch_use = available_channels[ch_idx]
+                            print(f"[DEBUG] Mapping requested channel '{ch}' to '{ch_use}'", file=sys.stderr)
+                        else:
+                            print(f"[DEBUG] Channel {ch} not found; skipping", file=sys.stderr)
+                            continue
+                    else:
+                        ch_idx = available_channels.index(ch)
+                        ch_use = ch
+
+                    # Read ALL data for this channel
+                    full_signal = f.readSignal(ch_idx)
+                    arr = np.asarray(full_signal, dtype=float)
+                    
+                    # Calculate statistics on the ENTIRE dataset
+                    stats = {
+                        "mean": float(np.mean(arr)),
+                        "median": float(np.median(arr)),
+                        "min": float(np.min(arr)),
+                        "max": float(np.max(arr)),
+                        "stddev": float(np.std(arr)),
+                        "total_samples": len(arr),
+                        "sample_rate": float(f.getSampleFrequency(ch_idx))
+                    }
+                    
+                    response["channels"][ch] = stats
+                    print(f"[DEBUG] {ch} stats calculated on {len(arr)} samples", file=sys.stderr)
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed calculating stats for channel {ch}: {e}", file=sys.stderr)
+                    continue
+
+        print(f"[DEBUG] Full file stats calculated for {len(response['channels'])} channels", file=sys.stderr)
+        return response
+    except Exception as e:
+        print(f"[ERROR] Exception in calculate_full_file_stats: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        raise e
+
 def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points):
     import numpy as np
     try:
@@ -271,10 +331,21 @@ def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points)
                 else:
                     idx = np.floor(np.linspace(0, n - 1, desired_points)).astype(int)
                     ds = data[idx]
+                
+                # Calculate statistics on the FULL dataset (not downsampled) for accuracy
+                stats = {
+                    "mean": float(np.mean(data)),
+                    "median": float(np.median(data)),
+                    "min": float(np.min(data)),
+                    "max": float(np.max(data)),
+                    "stddev": float(np.std(data))
+                }
+                
                 response["channels"][ch] = {
                     "data": ds.tolist(),
                     "sample_rate": per_channel_sample_rates.get(ch, 1.0),
-                    "original_length": n
+                    "original_length": n,
+                    "stats": stats
                 }
 
         print(f"[DEBUG] Multi-channel chunk built: labels={len(response['labels'])}, channels={len(response['channels'])}", file=sys.stderr)
@@ -344,7 +415,7 @@ elif command == "chunk-downsample":
             # Downsampling (unified stride-based)
             downsampled = downsample_stride(np.array(raw_signal), target_points)
 
-            # Statistika
+            # Calculate statistics on the FULL dataset (not downsampled) for accuracy
             stats = {
                 "mean": float(np.mean(raw_signal)),
                 "median": float(np.median(raw_signal)),
@@ -379,6 +450,20 @@ elif command == "multi-chunk-downsample":
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
+elif command == "full-stats":
+    try:
+        file_path = sys.argv[2]
+        channel_list = json.loads(sys.argv[3])  # expects '["Ch1", "Ch2"]'
+        
+        print(f"[DEBUG] Full-stats command parsed: {len(channel_list)} channels", file=sys.stderr)
+        
+        result = calculate_full_file_stats(file_path, channel_list)
+        print(json.dumps(result))
+    except Exception as e:
+        print(f"[ERROR] Exception in 'full-stats': {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
 elif command == "max-min":
     try:
         file_path = sys.argv[2]
@@ -396,4 +481,4 @@ elif command == "max-min":
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 else:
-    error_response(f"Unknown command: {command}. Use 'info', 'chunk', 'chunk-downsample', 'multi-chunk-downsample', or 'max-min'.")
+    error_response(f"Unknown command: {command}. Use 'info', 'chunk', 'chunk-downsample', 'multi-chunk-downsample', 'full-stats', or 'max-min'.")

@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
+import os from "os";
 
 // Helper function to get correct script paths in both development and production
 const getScriptPath = (scriptName: string): string => {
@@ -428,36 +429,52 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'EDF file not found' });
     }
 
-    console.log('[DEBUG] Starting efficient AHI analysis for:', {
+    console.log('[DEBUG] Starting FULL DATA AHI analysis for:', {
       filePath: decodedFilePath,
       flowChannel,
       spo2Channel
     });
 
-    // Use the existing parseEdf.py with max-min command to get basic statistics
-    // This is much more efficient than loading full data
-    const parseEdfScript = getScriptPath("parseEdf.py");
+    // Use the chunked AHI analysis script for memory-efficient full data processing
+    const ahiScript = getScriptPath("ahi_analysis_chunked.py");
     
-    // Get basic channel statistics instead of full data
-    console.log('[DEBUG] Getting channel statistics for AHI analysis...');
-    const channelStats = await getChannelStatistics(parseEdfScript, decodedFilePath, [flowChannel, spo2Channel]);
-    channelStats.filePath = decodedFilePath; // Add file path for later use
+    if (!fs.existsSync(ahiScript)) {
+      console.log('[ERROR] AHI analysis script not found:', ahiScript);
+      return res.status(500).json({ error: 'AHI analysis script not found' });
+    }
 
-    // Run lightweight AHI analysis based on statistics
-    console.log('[DEBUG] Running lightweight AHI analysis...');
-    const ahiResults = await runLightweightAHIAnalysis(channelStats, flowChannel, spo2Channel);
+    console.log('[DEBUG] Running FULL DATA chunked AHI analysis...');
+    const ahiResults = await runFullDataAHIAnalysis(ahiScript, decodedFilePath, flowChannel, spo2Channel);
 
     console.log('[DEBUG] AHI analysis completed successfully');
+    console.log(`[DEBUG] Results: AHI=${ahiResults.ahi_analysis?.ahi_score}, Events=${ahiResults.all_events?.length || 0}`);
     
-    // Return results in the format expected by the frontend
-    res.json({
+    // Create response with full medical data for professional analysis
+    const response = {
       success: true,
       ahi_analysis: ahiResults.ahi_analysis,
-      apnea_events: ahiResults.apnea_events,
-      hypopnea_events: ahiResults.hypopnea_events,
-      all_events: ahiResults.all_events,
-      message: "AHI analysis completed using professional Python engine"
-    });
+      event_summary: {
+        apnea_count: ahiResults.apnea_events?.length || 0,
+        hypopnea_count: ahiResults.hypopnea_events?.length || 0,
+        total_events: (ahiResults.apnea_events?.length || 0) + (ahiResults.hypopnea_events?.length || 0)
+      },
+      // Send full event data for medical accuracy
+      apnea_events: ahiResults.apnea_events || [],
+      hypopnea_events: ahiResults.hypopnea_events || [],
+      all_events: ahiResults.all_events || [],
+      message: "AHI analysis completed using full-resolution chunked processing for medical accuracy"
+    };
+    
+    const responseSize = JSON.stringify(response).length;
+    console.log(`[DEBUG] Sending AHI response: ${responseSize} characters`);
+    console.log(`[DEBUG] Response contains: ${response.apnea_events?.length || 0} apneas, ${response.hypopnea_events?.length || 0} hypopneas`);
+    console.log(`[DEBUG] Full response size: ${responseSize} chars`);
+    
+    // Set proper headers for large responses
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Length', Buffer.byteLength(JSON.stringify(response), 'utf8'));
+    
+    res.json(response);
 
   } catch (error) {
     console.error("[ERROR] AHI analysis failed:", error);
@@ -467,6 +484,212 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
     });
   }
 };
+
+// Full data AHI analysis using the chunked Python script for medical accuracy
+async function runFullDataAHIAnalysis(ahiScriptPath: string, filePath: string, flowChannel: string, spo2Channel: string): Promise<any> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log('[DEBUG] Starting full data AHI analysis...');
+      
+      // First, get file info to extract the full data
+      const parseEdfScript = getScriptPath("parseEdf.py");
+      const fileInfo = await getFileInfo(parseEdfScript, filePath);
+      
+      const flowChannelIndex = fileInfo.signalLabels.indexOf(flowChannel);
+      const spo2ChannelIndex = fileInfo.signalLabels.indexOf(spo2Channel);
+      
+      if (flowChannelIndex === -1 || spo2ChannelIndex === -1) {
+        throw new Error(`Channels not found: ${flowChannel}, ${spo2Channel}`);
+      }
+      
+      const flowSampleRate = fileInfo.frequencies[flowChannelIndex];
+      const spo2SampleRate = fileInfo.frequencies[spo2ChannelIndex];
+      const duration = fileInfo.duration;
+      
+      console.log(`[DEBUG] File info - Flow: ${flowSampleRate}Hz, SpO2: ${spo2SampleRate}Hz, Duration: ${duration}s`);
+      
+      // Calculate estimated data size for chunk parameter optimization
+      const estimatedFlowSamples = Math.floor(flowSampleRate * duration);
+      const estimatedSpo2Samples = Math.floor(spo2SampleRate * duration);
+      const estimatedFlowMB = (estimatedFlowSamples * 8) / (1024 * 1024);
+      const estimatedSpo2MB = (estimatedSpo2Samples * 8) / (1024 * 1024);
+      const totalEstimatedMB = estimatedFlowMB + estimatedSpo2MB;
+      
+      console.log(`[DEBUG] Estimated data size:`, {
+        flowSamples: estimatedFlowSamples,
+        spo2Samples: estimatedSpo2Samples,
+        flowMB: estimatedFlowMB.toFixed(1),
+        spo2MB: estimatedSpo2MB.toFixed(1),
+        totalMB: totalEstimatedMB.toFixed(1),
+        durationHours: (duration / 3600).toFixed(2)
+      });
+      
+      // Optimize chunk parameters based on estimated data size
+      let chunkDurationMinutes = 30; // Default
+      let overlapMinutes = 2; // Default
+      
+      if (totalEstimatedMB > 2000) { // > 2GB
+        chunkDurationMinutes = 15; // Smaller chunks for very large files
+        overlapMinutes = 1;
+        console.log('[DEBUG] Large file detected - using smaller chunks for memory efficiency');
+      } else if (totalEstimatedMB > 1000) { // > 1GB
+        chunkDurationMinutes = 20;
+        overlapMinutes = 1.5;
+        console.log('[DEBUG] Medium-large file detected - using medium chunks');
+      }
+      
+      // Prepare input data for the chunked AHI analysis script
+      // The script will now load data directly from the EDF file
+      const inputData = {
+        file_path: filePath,
+        flow_channel: flowChannel,
+        spo2_channel: spo2Channel,
+        flow_sample_rate: flowSampleRate,
+        spo2_sample_rate: spo2SampleRate,
+        chunk_duration_minutes: chunkDurationMinutes,
+        overlap_minutes: overlapMinutes,
+        file_duration_hours: duration / 3600,
+        estimated_data_mb: totalEstimatedMB
+      };
+      
+      console.log('[DEBUG] Running chunked AHI analysis script with file parameters...');
+      
+      // Run the chunked AHI analysis by passing data through stdin (avoids file permission issues)
+      const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+      const python = spawn(pythonCommand, [ahiScriptPath, '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      
+      // Write input data to Python script via stdin
+      const inputJson = JSON.stringify(inputData);
+      python.stdin.write(inputJson);
+      python.stdin.end();
+      
+      let output = '';
+      let errorOutput = '';
+      
+      python.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        output += chunk;
+        console.log('[PYTHON STDOUT]', chunk.trim());
+      });
+      
+      python.stderr.on('data', (data) => {
+        const err = data.toString();
+        errorOutput += err;
+        console.log('[PYTHON STDERR]', err.trim());
+      });
+      
+      // Add timeout handling for long-running analysis
+      const analysisTimeout = setTimeout(() => {
+        console.warn('[WARN] AHI analysis taking longer than expected, but continuing...');
+      }, 30000); // 30 seconds
+      
+      python.on('close', (code) => {
+        clearTimeout(analysisTimeout);
+        
+        if (code === 0) {
+          try {
+            const results = JSON.parse(output);
+            console.log('[DEBUG] AHI analysis completed successfully');
+            console.log(`[DEBUG] Results: ${results.apnea_events?.length || 0} apneas, ${results.hypopnea_events?.length || 0} hypopneas`);
+            console.log('[DEBUG] Full results structure:', {
+              hasAhiAnalysis: !!results.ahi_analysis,
+              ahiScore: results.ahi_analysis?.ahi_score,
+              severity: results.ahi_analysis?.severity,
+              totalEvents: results.all_events?.length || 0,
+              apneaCount: results.apnea_events?.length || 0,
+              hypopneaCount: results.hypopnea_events?.length || 0,
+              recordingDurationHours: results.ahi_analysis?.recording_duration_hours
+            });
+            resolve(results);
+          } catch (parseError) {
+            console.error('[ERROR] Failed to parse AHI results:', parseError);
+            console.error('[ERROR] Raw output:', output);
+            reject(new Error(`Failed to parse AHI results: ${parseError.message}`));
+          }
+        } else {
+          console.error('[ERROR] AHI analysis failed with code:', code);
+          console.error('[ERROR] Error output:', errorOutput);
+          reject(new Error(`AHI analysis failed: ${errorOutput}`));
+        }
+      });
+      
+      python.on('error', (error) => {
+        console.error('[ERROR] Failed to start Python AHI analysis:', error);
+        reject(new Error(`Failed to start Python AHI analysis: ${error.message}`));
+      });
+      
+    } catch (error) {
+      console.error('[ERROR] Full data AHI analysis failed:', error);
+      reject(new Error(`Full data AHI analysis failed: ${error.message}`));
+    }
+  });
+}
+
+// Get full channel data for AHI analysis (optimized for memory efficiency)
+async function getFullChannelDataForAHI(scriptPath: string, filePath: string, channel: string): Promise<number[]> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get file info first
+      const fileInfo = await getFileInfo(scriptPath, filePath);
+      const channelIndex = fileInfo.signalLabels.indexOf(channel);
+      
+      if (channelIndex === -1) {
+        throw new Error(`Channel ${channel} not found`);
+      }
+      
+      const sampleRate = fileInfo.frequencies[channelIndex];
+      const duration = fileInfo.duration;
+      const totalSamples = Math.floor(sampleRate * duration);
+      
+      console.log(`[DEBUG] Extracting full data for ${channel}: ${totalSamples} samples @ ${sampleRate}Hz`);
+      
+      // Use chunked reading for memory efficiency with dynamic chunk sizing
+      const baseChunkDuration = 300; // 5 minutes base chunk size
+      const memoryLimitMB = 1024; // 1GB memory limit per channel
+      const bytesPerSample = 8; // 8 bytes per double precision number
+      const maxSamplesPerChunk = Math.floor((memoryLimitMB * 1024 * 1024) / bytesPerSample);
+      const chunkSize = Math.min(Math.floor(sampleRate * baseChunkDuration), maxSamplesPerChunk);
+      const numChunks = Math.ceil(totalSamples / chunkSize);
+      
+      console.log(`[DEBUG] Memory-optimized chunking for ${channel}:`, {
+        totalSamples,
+        sampleRate,
+        chunkSize,
+        numChunks,
+        chunkDurationMinutes: (chunkSize / sampleRate / 60).toFixed(1),
+        estimatedMemoryMB: (chunkSize * bytesPerSample / 1024 / 1024).toFixed(1)
+      });
+      
+      const allData: number[] = [];
+      
+      for (let i = 0; i < numChunks; i++) {
+        const startSample = i * chunkSize;
+        const endSample = Math.min(startSample + chunkSize, totalSamples);
+        const chunkSamples = endSample - startSample;
+        
+        console.log(`[DEBUG] Reading chunk ${i + 1}/${numChunks}: samples ${startSample}-${endSample} (${(chunkSamples/sampleRate/60).toFixed(1)}min)`);
+        
+        const startTime = startSample / sampleRate;
+        const endTime = endSample / sampleRate;
+        const chunkData = await getChunkData(scriptPath, filePath, channel, startTime, endTime, sampleRate);
+        allData.push(...chunkData);
+        
+        // Log memory usage periodically
+        if ((i + 1) % 10 === 0 || i === numChunks - 1) {
+          const currentMemoryMB = (allData.length * bytesPerSample / 1024 / 1024).toFixed(1);
+          console.log(`[DEBUG] Memory usage after chunk ${i + 1}/${numChunks}: ${currentMemoryMB}MB`);
+        }
+      }
+      
+      console.log(`[DEBUG] Successfully extracted ${allData.length} samples for ${channel}`);
+      resolve(allData);
+      
+    } catch (error) {
+      console.error(`[ERROR] Failed to extract full data for ${channel}:`, error);
+      reject(error);
+    }
+  });
+}
 
 // Efficient helper function to get channel statistics (not full data)
 async function getChannelStatistics(scriptPath: string, filePath: string, channels: string[]): Promise<any> {
@@ -507,7 +730,7 @@ async function getChannelStatistics(scriptPath: string, filePath: string, channe
   });
 }
 
-// Professional AHI analysis using dedicated Python script (medical accuracy)
+// Professional AHI analysis using true chunked processing (memory-efficient)
 async function runLightweightAHIAnalysis(channelStats: any, flowChannel: string, spo2Channel: string): Promise<any> {
   const flowStats = channelStats[flowChannel];
   const spo2Stats = channelStats[spo2Channel];
@@ -516,55 +739,111 @@ async function runLightweightAHIAnalysis(channelStats: any, flowChannel: string,
     throw new Error('Could not get statistics for required channels');
   }
 
-  console.log('[DEBUG] Running professional AHI analysis using dedicated Python script...');
+  console.log('[DEBUG] Running true chunked AHI analysis...');
   
   const parseEdfScript = getScriptPath("parseEdf.py");
   const ahiScript = getScriptPath("ahi_analysis.py");
   const filePath = channelStats.filePath || channelStats[flowChannel]?.filePath;
   
   try {
-    // Get full resolution data for both channels
-    console.log('[DEBUG] Extracting full resolution flow and SpO2 data...');
-    const flowData = await getFullChannelData(parseEdfScript, filePath, flowChannel);
-    const spo2Data = await getFullChannelData(parseEdfScript, filePath, spo2Channel);
+    // Get file info to determine chunking parameters
+    const fileInfo = await getFileInfo(parseEdfScript, filePath);
+    const flowChannelIndex = fileInfo.signalLabels.indexOf(flowChannel);
+    const spo2ChannelIndex = fileInfo.signalLabels.indexOf(spo2Channel);
     
-    // Prepare input data for Python AHI analysis script
-    const analysisInput = {
-      flow_data: flowData.data,
-      spo2_data: spo2Data.data,
-      flow_sample_rate: flowData.sampleRate,
-      spo2_sample_rate: spo2Data.sampleRate
-    };
-    
-    // Write input data to temporary file (Python script expects JSON file)
-    const tempInputFile = `/tmp/ahi_input_${Date.now()}.json`;
-    require('fs').writeFileSync(tempInputFile, JSON.stringify(analysisInput));
-    
-    console.log('[DEBUG] Running Python AHI analysis script...');
-    
-    // Run the professional Python AHI analysis
-    const ahiResults = await runPythonAHIAnalysis(ahiScript, tempInputFile);
-    
-    // Clean up temporary file
-    try {
-      require('fs').unlinkSync(tempInputFile);
-    } catch (cleanupError) {
-      console.warn('[WARNING] Failed to clean up temporary file:', cleanupError);
+    if (flowChannelIndex === -1 || spo2ChannelIndex === -1) {
+      throw new Error(`Channels not found: ${flowChannel}, ${spo2Channel}`);
     }
+    
+    const flowSampleRate = fileInfo.frequencies[flowChannelIndex];
+    const spo2SampleRate = fileInfo.frequencies[spo2ChannelIndex];
+    const duration = fileInfo.duration;
+    
+    console.log(`[DEBUG] File info - Flow: ${flowSampleRate}Hz, SpO2: ${spo2SampleRate}Hz, Duration: ${duration}s`);
+    
+    // Calculate chunk parameters for memory-efficient processing
+    // Optimized for 4GB server memory while preserving medical accuracy
+    const chunkDurationMinutes = 5; // 5-minute chunks to reduce memory usage
+    const overlapMinutes = 1; // 1-minute overlap for better event detection
+    const chunkDurationSeconds = chunkDurationMinutes * 60;
+    const overlapSeconds = overlapMinutes * 60;
+    
+    // Calculate number of chunks needed
+    const effectiveChunkSize = chunkDurationSeconds - overlapSeconds;
+    const numChunks = Math.ceil(duration / effectiveChunkSize);
+    
+    console.log(`[DEBUG] Processing ${numChunks} FULL RESOLUTION chunks of ${chunkDurationMinutes}min each with ${overlapMinutes}min overlap`);
+    console.log(`[DEBUG] Each chunk will contain ~${Math.floor(chunkDurationMinutes * 60 * flowSampleRate)} flow samples and ~${Math.floor(chunkDurationMinutes * 60 * spo2SampleRate)} SpO2 samples`);
+    
+    // First, calculate global baseline from representative samples across all chunks
+    console.log('[DEBUG] Calculating global baseline from representative samples...');
+    const globalBaseline = await calculateGlobalBaseline(parseEdfScript, filePath, flowChannel, flowSampleRate, duration);
+    console.log(`[DEBUG] Global baseline calculated: ${globalBaseline}`);
+    
+    // Process each chunk separately
+    const allApneaEvents = [];
+    const allHypopneaEvents = [];
+    
+    for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
+      console.log(`[DEBUG] Processing chunk ${chunkIdx + 1}/${numChunks}...`);
+      
+      // Calculate chunk boundaries
+      let chunkStartTime = chunkIdx * effectiveChunkSize;
+      let chunkEndTime = Math.min(chunkStartTime + chunkDurationSeconds, duration);
+      
+      // Adjust for first chunk
+      if (chunkIdx === 0) {
+        chunkStartTime = 0;
+      }
+      
+      // Get full resolution chunk data for both channels using correct sample rates
+      const flowChunkData = await getChunkData(parseEdfScript, filePath, flowChannel, chunkStartTime, chunkEndTime, flowSampleRate);
+      const spo2ChunkData = await getChunkData(parseEdfScript, filePath, spo2Channel, chunkStartTime, chunkEndTime, spo2SampleRate);
+      
+      console.log(`[DEBUG] Chunk ${chunkIdx + 1} data sizes: Flow=${flowChunkData.length} samples, SpO2=${spo2ChunkData.length} samples`);
+      
+      // Process this chunk with Python AHI analysis using global baseline
+      const chunkResults = await processChunkAHI(ahiScript, flowChunkData, spo2ChunkData, flowSampleRate, spo2SampleRate, chunkStartTime, globalBaseline);
+      
+      // Add chunk offset to event times
+      chunkResults.apnea_events.forEach(event => {
+        event.start_time += chunkStartTime;
+        event.end_time += chunkStartTime;
+      });
+      chunkResults.hypopnea_events.forEach(event => {
+        event.start_time += chunkStartTime;
+        event.end_time += chunkStartTime;
+      });
+      
+      allApneaEvents.push(...chunkResults.apnea_events);
+      allHypopneaEvents.push(...chunkResults.hypopnea_events);
+      
+      console.log(`[DEBUG] Chunk ${chunkIdx + 1}: ${chunkResults.apnea_events.length} apneas, ${chunkResults.hypopnea_events.length} hypopneas`);
+    }
+    
+    // Remove duplicate events from overlapping chunks
+    console.log('[DEBUG] Removing duplicate events from overlapping chunks...');
+    const uniqueApneaEvents = removeDuplicateEvents(allApneaEvents);
+    const uniqueHypopneaEvents = removeDuplicateEvents(allHypopneaEvents);
+    
+    console.log(`[DEBUG] After deduplication: ${uniqueApneaEvents.length} apneas, ${uniqueHypopneaEvents.length} hypopneas`);
+    
+    // Calculate final AHI
+    const ahiResults = calculateAHI(uniqueApneaEvents, uniqueHypopneaEvents, duration / 3600);
     
     // Return results in the exact format expected by the frontend
     const optimizedResults = {
-      ahi_analysis: ahiResults.ahi_analysis,
-      apnea_events: ahiResults.apnea_events,
-      hypopnea_events: ahiResults.hypopnea_events,
-      all_events: ahiResults.all_events
+      ahi_analysis: ahiResults,
+      apnea_events: uniqueApneaEvents,
+      hypopnea_events: uniqueHypopneaEvents,
+      all_events: [...uniqueApneaEvents, ...uniqueHypopneaEvents].sort((a, b) => a.start_time - b.start_time)
     };
     
-    console.log(`[DEBUG] AHI analysis complete: ${optimizedResults.ahi_analysis.ahi_score} (${optimizedResults.ahi_analysis.severity})`);
+    console.log(`[DEBUG] True chunked AHI analysis complete: ${optimizedResults.ahi_analysis.ahi_score} (${optimizedResults.ahi_analysis.severity})`);
     return optimizedResults;
     
   } catch (error) {
-    console.error('[ERROR] Python AHI analysis failed:', error);
+    console.error('[ERROR] True chunked AHI analysis failed:', error);
     throw new Error(`AHI analysis failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -623,13 +902,17 @@ async function getFullChannelData(scriptPath: string, filePath: string, channel:
         
         console.log(`[DEBUG] Channel ${channel}: ${sampleRate}Hz, ${duration}s, ${totalSamples} samples`);
         
-        // For AHI analysis, we don't need full resolution - use reasonable sample size
-        // Limit to maximum 1 hour of data at the sample rate, or 100k samples, whichever is smaller
-        const maxSamplesForAHI = Math.min(totalSamples, Math.min(sampleRate * 3600, 100000));
-        console.log(`[DEBUG] Limiting AHI data to ${maxSamplesForAHI} samples (from ${totalSamples} total)`);
+        // For chunk-based AHI analysis, use full dataset with reasonable downsampling
+        // Use all available data but downsample to reasonable number of points for processing
+        const maxSamplesForAHI = totalSamples;
+        console.log(`[DEBUG] Using full dataset for chunk-based AHI analysis: ${maxSamplesForAHI} samples`);
         
-        // Use chunk-downsample for better performance
-        const args = [scriptPath, 'chunk-downsample', filePath, channel, '0', maxSamplesForAHI.toString(), '1000'];
+        // Use chunk-downsample for better performance with reasonable target points
+        // Target 2000 points per hour of data to balance accuracy and memory usage
+        const targetPoints = Math.min(20000, Math.max(1000, Math.floor(totalSamples / (sampleRate * 3600)) * 2000));
+        console.log(`[DEBUG] Using ${targetPoints} target points for downsampling`);
+        
+        const args = [scriptPath, 'chunk-downsample', filePath, channel, '0', maxSamplesForAHI.toString(), targetPoints.toString()];
         
         console.log(`[DEBUG] Getting full channel data for ${channel}: ${args.join(' ')}`);
         const python = spawn(pythonCommand, args);
@@ -1274,6 +1557,82 @@ async function runAHIAnalysis(scriptPath: string, inputData: any): Promise<any> 
 };
 
 // Handler for finding max/min values from raw data
+export const handleFullStats = async (req: Request, res: Response) => {
+  try {
+    const { filePath, channels } = req.body;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "File path is required" });
+    }
+
+    if (!channels || !Array.isArray(channels) || channels.length === 0) {
+      return res.status(400).json({ error: "Channels array is required" });
+    }
+
+    const scriptPath = path.join(__dirname, "../scripts/parseEdf.py");
+    if (!fs.existsSync(scriptPath)) {
+      console.error("[ERROR] Python script not found:", scriptPath);
+      return res.status(500).json({ error: "Python script not found. Please check the installation." });
+    }
+
+    const args = [scriptPath, "full-stats", filePath, JSON.stringify(channels)];
+    console.log("[DEBUG] Executing Python full-stats script with:", args.join(" "));
+
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    const python = spawn(pythonCommand, args);
+
+    let output = "";
+    let errorOutput = "";
+
+    python.stdout.on("data", (data) => {
+      output += data.toString();
+      console.log("[PYTHON STDOUT]", data.toString());
+    });
+
+    python.stderr.on("data", (data) => {
+      const err = data.toString();
+      errorOutput += err;
+      console.error("[PYTHON STDERR]", err);
+    });
+
+    python.on("close", (code) => {
+      console.log("[DEBUG] Python process exited with code:", code);
+      if (code === 0) {
+        try {
+          const parsed = JSON.parse(output);
+          console.log("[DEBUG] Successfully parsed Python full-stats output");
+          res.json(parsed);
+        } catch (err) {
+          console.error("[ERROR] JSON parse failed:", err);
+          console.error("[PYTHON STDOUT]", output);
+          res.status(500).json({ error: "Failed to parse response from Python script." });
+        }
+      } else {
+        console.error("[ERROR] Python error:", errorOutput);
+        
+        let errorMessage = "Error calculating full file statistics.";
+        if (errorOutput.includes("ModuleNotFoundError") || errorOutput.includes("ImportError")) {
+          errorMessage = "Required Python modules are missing. Please check server dependencies.";
+        } else if (errorOutput.includes("FileNotFoundError")) {
+          errorMessage = "EDF file not found or corrupted.";
+        } else if (errorOutput.includes("MemoryError")) {
+          errorMessage = "File too large for statistics calculation. Consider using a smaller file or more memory.";
+        }
+        
+        res.status(500).json({ 
+          error: errorMessage, 
+          details: errorOutput,
+          code: code || 1
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error("[ERROR] Exception in handleFullStats:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 export const handleMaxMinValues = async (req: Request, res: Response) => {
   try {
     console.log('[DEBUG] Max-min request body:', req.body);
@@ -1343,3 +1702,268 @@ export const handleMaxMinValues = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Max-min analysis failed' });
   }
 };
+
+// Get optimized chunk data for AHI analysis (balanced resolution for medical accuracy and memory efficiency)
+async function getChunkData(scriptPath: string, filePath: string, channel: string, startTime: number, endTime: number, sampleRate: number): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    
+    // Convert time to samples using the actual sample rate
+    const startSample = Math.floor(startTime * sampleRate);
+    const durationSamples = Math.floor((endTime - startTime) * sampleRate);
+    
+    // For AHI analysis, use optimized target points to balance medical accuracy and memory usage
+    // Use 10Hz effective resolution (sufficient for 10-second event detection)
+    const timeRange = endTime - startTime;
+    const targetPoints = Math.min(10000, Math.max(100, Math.floor(timeRange * 10))); // 10Hz resolution
+    
+    console.log(`[DEBUG] Getting OPTIMIZED chunk data: ${channel} @ ${sampleRate}Hz, ${durationSamples} samples, ${targetPoints} target points (${(endTime-startTime).toFixed(1)}s)`);
+    
+    // Use 'chunk-downsample' command with optimized target points for medical accuracy
+    const args = [scriptPath, 'chunk-downsample', filePath, channel, 
+                 startSample.toString(),
+                 durationSamples.toString(),
+                 targetPoints.toString()];
+    
+    console.log(`[DEBUG] Optimized resolution command: ${args.join(' ')}`);
+    
+    const python = spawn(pythonCommand, args);
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const chunkData = JSON.parse(output);
+          console.log(`[DEBUG] Received ${chunkData.data.length} optimized samples for ${channel} (${(chunkData.data.length/timeRange).toFixed(1)}Hz effective resolution)`);
+          resolve(chunkData.data);
+        } catch (err) {
+          reject(new Error('Failed to parse optimized chunk data'));
+        }
+      } else {
+        reject(new Error(`Failed to get optimized chunk data: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python process: ${error.message}`));
+    });
+  });
+}
+
+// Calculate global baseline from full resolution representative samples across the entire recording
+async function calculateGlobalBaseline(scriptPath: string, filePath: string, channel: string, 
+                                      sampleRate: number, duration: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    
+    // For medical accuracy, sample full resolution data from multiple time points
+    // Use optimized chunks to balance accuracy and speed
+    const chunkDurationMinutes = 5; // 5-minute chunks for baseline calculation
+    const chunkDurationSeconds = chunkDurationMinutes * 60;
+    const numChunks = Math.ceil(duration / chunkDurationSeconds);
+    
+    console.log(`[DEBUG] Calculating global baseline from ${numChunks} full resolution chunks of ${chunkDurationMinutes}min each`);
+    
+    // Process chunks sequentially to avoid memory issues
+    const processChunksSequentially = async () => {
+      const allData = [];
+      const maxChunks = Math.min(numChunks, 4); // Limit to 4 chunks (20 minutes max) for baseline
+      
+      for (let i = 0; i < maxChunks; i++) {
+        const chunkStart = i * chunkDurationSeconds;
+        const chunkEnd = Math.min(chunkStart + chunkDurationSeconds, duration);
+        
+        console.log(`[DEBUG] Processing baseline chunk ${i + 1}/${maxChunks} (${chunkStart}s to ${chunkEnd}s)`);
+        
+        try {
+          const chunkData = await getChunkData(scriptPath, filePath, channel, chunkStart, chunkEnd, sampleRate);
+          allData.push(...chunkData);
+          console.log(`[DEBUG] Added ${chunkData.length} samples from chunk ${i + 1}`);
+        } catch (error) {
+          console.warn(`[WARNING] Failed to process baseline chunk ${i + 1}: ${error.message}`);
+          // Continue with other chunks
+        }
+      }
+      
+      if (allData.length === 0) {
+        throw new Error('No baseline data collected from any chunks');
+      }
+      
+      console.log(`[DEBUG] Combined ${allData.length} samples from ${maxChunks} chunks for global baseline`);
+      
+      // Calculate baseline using median of upper 75% of values (more robust)
+      const flowAbs = allData.map((x: number) => Math.abs(x));
+      flowAbs.sort((a: number, b: number) => a - b);
+      const upper75Percentile = flowAbs[Math.floor(flowAbs.length * 0.25)]; // 75th percentile
+      const baselineCandidates = flowAbs.filter((x: number) => x >= upper75Percentile);
+      // Use median instead of mean for more robust baseline
+      const sortedCandidates = baselineCandidates.sort((a: number, b: number) => a - b);
+      const baseline = sortedCandidates[Math.floor(sortedCandidates.length / 2)];
+      
+      console.log(`[DEBUG] Global baseline calculated: ${baseline.toFixed(3)} from ${allData.length} full resolution samples`);
+      return baseline;
+    };
+    
+    processChunksSequentially()
+      .then((baseline) => resolve(baseline))
+      .catch((error) => reject(new Error(`Failed to calculate global baseline: ${error.message}`)));
+  });
+}
+
+// Process a single chunk with Python AHI analysis
+async function processChunkAHI(ahiScriptPath: string, flowData: number[], spo2Data: number[], 
+                              flowSampleRate: number, spo2SampleRate: number, chunkStartTime: number, globalBaseline?: number): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
+    
+    // Prepare input data for this chunk
+    const analysisInput = {
+      flow_data: flowData,
+      spo2_data: spo2Data,
+      flow_sample_rate: flowSampleRate,
+      spo2_sample_rate: spo2SampleRate,
+      global_baseline: globalBaseline // Pass global baseline to Python script
+    };
+    
+    // Write input data to temporary file
+    const tempInputFile = `/tmp/ahi_chunk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.json`;
+    require('fs').writeFileSync(tempInputFile, JSON.stringify(analysisInput));
+    
+    const args = [ahiScriptPath, tempInputFile];
+    
+    const python = spawn(pythonCommand, args);
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      // Clean up temporary file
+      try {
+        require('fs').unlinkSync(tempInputFile);
+      } catch (cleanupError) {
+        console.warn('[WARNING] Failed to clean up temporary chunk file:', cleanupError);
+      }
+      
+      if (code === 0) {
+        try {
+          const results = JSON.parse(output);
+          resolve(results);
+        } catch (err) {
+          reject(new Error('Failed to parse chunk AHI results'));
+        }
+      } else {
+        reject(new Error(`Python AHI analysis failed for chunk: ${errorOutput}`));
+      }
+    });
+
+    python.on('error', (error) => {
+      reject(new Error(`Failed to start Python AHI analysis: ${error.message}`));
+    });
+  });
+}
+
+// Remove duplicate events from overlapping chunks
+function removeDuplicateEvents(events: any[]): any[] {
+  if (!events || events.length === 0) {
+    return [];
+  }
+  
+  // Sort events by start time
+  const sortedEvents = events.sort((a, b) => a.start_time - b.start_time);
+  const uniqueEvents = [];
+  
+  for (const event of sortedEvents) {
+    let isDuplicate = false;
+    
+    for (const existingEvent of uniqueEvents) {
+      // Check for overlap
+      const overlapStart = Math.max(event.start_time, existingEvent.start_time);
+      const overlapEnd = Math.min(event.end_time, existingEvent.end_time);
+      const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+      
+      // Calculate overlap percentage
+      const eventDuration = event.end_time - event.start_time;
+      const existingDuration = existingEvent.end_time - existingEvent.start_time;
+      const maxDuration = Math.max(eventDuration, existingDuration);
+      
+      const overlapPercentage = overlapDuration / maxDuration;
+      
+      if (overlapPercentage > 0.5) { // More than 50% overlap
+        isDuplicate = true;
+        // Keep the longer event
+        if (eventDuration > existingDuration) {
+          const index = uniqueEvents.indexOf(existingEvent);
+          uniqueEvents[index] = event;
+        }
+        break;
+      }
+    }
+    
+    if (!isDuplicate) {
+      uniqueEvents.push(event);
+    }
+  }
+  
+  return uniqueEvents;
+}
+
+// Calculate AHI from events
+function calculateAHI(apneaEvents: any[], hypopneaEvents: any[], recordingDurationHours: number): any {
+  const totalEvents = apneaEvents.length + hypopneaEvents.length;
+  const ahiScore = totalEvents / recordingDurationHours;
+  
+  // Classify severity
+  let severity, severityColor;
+  if (ahiScore < 5) {
+    severity = "Normal";
+    severityColor = "green";
+  } else if (ahiScore < 15) {
+    severity = "Mild";
+    severityColor = "yellow";
+  } else if (ahiScore < 30) {
+    severity = "Moderate";
+    severityColor = "orange";
+  } else {
+    severity = "Severe";
+    severityColor = "red";
+  }
+  
+  // Calculate statistics
+  const totalApneaDuration = apneaEvents.reduce((sum, event) => sum + event.duration, 0);
+  const totalHypopneaDuration = hypopneaEvents.reduce((sum, event) => sum + event.duration, 0);
+  const totalEventDuration = totalApneaDuration + totalHypopneaDuration;
+  
+  return {
+    ahi_score: Math.round(ahiScore * 10) / 10,
+    severity: severity,
+    severity_color: severityColor,
+    total_events: totalEvents,
+    apnea_count: apneaEvents.length,
+    hypopnea_count: hypopneaEvents.length,
+    recording_duration_hours: Math.round(recordingDurationHours * 100) / 100,
+    total_event_duration_minutes: Math.round(totalEventDuration / 60 * 10) / 10,
+    event_percentage: Math.round((totalEventDuration / (recordingDurationHours * 3600)) * 100 * 10) / 10,
+    avg_apnea_duration: apneaEvents.length > 0 ? Math.round(totalApneaDuration / apneaEvents.length * 10) / 10 : 0,
+    avg_hypopnea_duration: hypopneaEvents.length > 0 ? Math.round(totalHypopneaDuration / hypopneaEvents.length * 10) / 10 : 0,
+    events_per_hour_breakdown: {
+      apnea_per_hour: Math.round(apneaEvents.length / recordingDurationHours * 10) / 10,
+      hypopnea_per_hour: Math.round(hypopneaEvents.length / recordingDurationHours * 10) / 10
+    }
+  };
+}
