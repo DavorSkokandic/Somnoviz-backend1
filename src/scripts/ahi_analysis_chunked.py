@@ -1,16 +1,17 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Chunk-Based AHI (Apnea-Hypopnea Index) Analysis Module
-======================================================
+Chunked AHI (Apnea-Hypopnea Index) Analysis Module
+==================================================
 
 This module implements memory-efficient chunk-based detection of apnea and hypopnea events
 from polysomnography data (Flow and SpO2 channels) and calculates the AHI score.
+It uses the EXACT SAME analysis logic as ahi_analysis.py but processes data in chunks.
 
 Memory-Efficient Design:
 - Processes data in configurable chunks to fit within memory limits
 - Uses overlap between chunks to prevent missing events at boundaries
 - Aggregates results from all chunks for final AHI calculation
-- Easily scalable for different server resources
+- Uses the proven analysis logic from the original ahi_analysis.py
 
 Clinical Criteria:
 - Apnea: Flow reduction ≥90% from baseline for ≥10 seconds
@@ -29,11 +30,11 @@ from scipy.ndimage import uniform_filter1d
 
 
 class ChunkedAHIAnalyzer:
-    """Memory-efficient chunk-based AHI analyzer."""
+    """Memory-efficient chunk-based AHI analyzer using the proven ahi_analysis.py logic."""
     
     def __init__(self, flow_data: np.ndarray, spo2_data: np.ndarray, 
                  flow_sample_rate: float, spo2_sample_rate: float,
-                 chunk_duration_minutes: int = 60, overlap_minutes: int = 5):
+                 chunk_duration_minutes: int = 30, overlap_minutes: int = 2):
         """
         Initialize the chunk-based AHI analyzer.
         
@@ -42,8 +43,8 @@ class ChunkedAHIAnalyzer:
             spo2_data: SpO2 signal data (numpy array)
             flow_sample_rate: Sampling rate of flow signal (Hz)
             spo2_sample_rate: Sampling rate of SpO2 signal (Hz)
-            chunk_duration_minutes: Duration of each chunk in minutes (default: 60)
-            overlap_minutes: Overlap between chunks in minutes (default: 5)
+            chunk_duration_minutes: Duration of each chunk in minutes (default: 30)
+            overlap_minutes: Overlap between chunks in minutes (default: 2)
         """
         self.flow_data = np.array(flow_data)
         self.spo2_data = np.array(spo2_data)
@@ -52,7 +53,7 @@ class ChunkedAHIAnalyzer:
         self.chunk_duration_minutes = chunk_duration_minutes
         self.overlap_minutes = overlap_minutes
         
-        # Clinical parameters (configurable)
+        # EXACT SAME Clinical parameters as ahi_analysis.py
         self.apnea_threshold = 0.1  # 10% of baseline (90% reduction)
         self.hypopnea_min_threshold = 0.3  # 30% of baseline (70% reduction)
         self.hypopnea_max_threshold = 0.7  # 70% of baseline (30% reduction)
@@ -74,6 +75,8 @@ class ChunkedAHIAnalyzer:
         
         print(f"[CHUNKED-AHI] Initialized with Flow: {len(flow_data)} samples @ {flow_sample_rate}Hz", file=sys.stderr)
         print(f"[CHUNKED-AHI] SpO2: {len(spo2_data)} samples @ {spo2_sample_rate}Hz", file=sys.stderr)
+        print(f"[CHUNKED-AHI] Flow data range: {np.min(flow_data):.3f} to {np.max(flow_data):.3f}", file=sys.stderr)
+        print(f"[CHUNKED-AHI] SpO2 data range: {np.min(spo2_data):.3f} to {np.max(spo2_data):.3f}", file=sys.stderr)
         print(f"[CHUNKED-AHI] Recording duration: {self.recording_duration_hours:.2f} hours", file=sys.stderr)
         print(f"[CHUNKED-AHI] Chunk size: {chunk_duration_minutes}min, Overlap: {overlap_minutes}min", file=sys.stderr)
         
@@ -133,18 +136,13 @@ class ChunkedAHIAnalyzer:
     
     def _calculate_global_baseline(self) -> float:
         """
-        Calculate a global baseline flow using representative samples from the entire recording.
-        This is more robust than using only the first chunk.
+        Calculate a global baseline flow using the EXACT SAME logic as ahi_analysis.py.
         """
         print("[CHUNKED-AHI] Calculating global baseline flow...", file=sys.stderr)
         
-        # Sample data from multiple chunks to get a representative baseline
-        sample_size = min(100000, len(self.flow_data))  # Sample up to 100k points
-        step = len(self.flow_data) // sample_size if len(self.flow_data) > sample_size else 1
-        sampled_flow = self.flow_data[::step]
-        
         # Use median of upper 50% of values to avoid including apneas in baseline
-        flow_abs = np.abs(sampled_flow)
+        # EXACT SAME logic as ahi_analysis.py calculate_baseline_flow()
+        flow_abs = np.abs(self.flow_data)
         upper_50_percentile = np.percentile(flow_abs, 50)
         baseline_candidates = flow_abs[flow_abs >= upper_50_percentile]
         baseline = np.median(baseline_candidates)
@@ -152,51 +150,29 @@ class ChunkedAHIAnalyzer:
         print(f"[CHUNKED-AHI] Global baseline flow: {baseline:.3f}", file=sys.stderr)
         return baseline
     
-    def _detect_events_in_chunk(self, flow_chunk: np.ndarray, spo2_chunk: np.ndarray,
-                               chunk_start_time: float, chunk_end_time: float,
-                               global_baseline: float) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Detect apnea and hypopnea events in a single chunk.
-        
-        Args:
-            flow_chunk: Flow data for this chunk
-            spo2_chunk: SpO2 data for this chunk
-            chunk_start_time: Start time of chunk in seconds
-            chunk_end_time: End time of chunk in seconds
-            global_baseline: Global baseline flow value
-            
-        Returns:
-            Tuple of (apnea_events, hypopnea_events)
-        """
-        if len(flow_chunk) == 0:
-            return [], []
-        
-        # Detect apnea events
-        apnea_events = self._detect_apnea_in_chunk(flow_chunk, chunk_start_time, global_baseline)
-        
-        # Detect hypopnea events
-        hypopnea_events = self._detect_hypopnea_in_chunk(
-            flow_chunk, spo2_chunk, chunk_start_time, chunk_end_time, global_baseline
-        )
-        
-        return apnea_events, hypopnea_events
-    
     def _detect_apnea_in_chunk(self, flow_chunk: np.ndarray, chunk_start_time: float,
                               global_baseline: float) -> List[Dict]:
-        """Detect apnea events in a chunk."""
+        """
+        Detect apnea events in a chunk using EXACT SAME logic as ahi_analysis.py.
+        """
         threshold = global_baseline * self.apnea_threshold
         
-        # Smooth the signal to reduce noise
+        print(f"[CHUNKED-AHI] Apnea detection - Baseline: {global_baseline:.3f}, Threshold: {threshold:.3f} ({self.apnea_threshold*100:.0f}% of baseline)", file=sys.stderr)
+        
+        # EXACT SAME smoothing logic as ahi_analysis.py
         filter_size = max(1, int(self.flow_sr * 2))  # 2-second window minimum
         if filter_size >= len(flow_chunk):
             filter_size = max(1, len(flow_chunk) // 4)
         
+        print(f"[CHUNKED-AHI] Using filter size: {filter_size} for flow smoothing", file=sys.stderr)
         flow_smooth = uniform_filter1d(np.abs(flow_chunk), size=filter_size)
         
         # Find regions below threshold
         below_threshold = flow_smooth < threshold
+        below_count = np.sum(below_threshold)
+        print(f"[CHUNKED-AHI] Found {below_count} samples below threshold ({below_count/self.flow_sr:.1f}s total)", file=sys.stderr)
         
-        # Find continuous regions
+        # EXACT SAME event detection logic as ahi_analysis.py
         events = []
         in_event = False
         event_start = 0
@@ -224,9 +200,7 @@ class ChunkedAHIAnalyzer:
                         'start_time': absolute_start_time,
                         'end_time': absolute_end_time,
                         'duration': duration,
-                        'severity': 'severe' if duration > 30 else 'moderate',
-                        'chunk_relative_start': event_start / self.flow_sr,
-                        'chunk_relative_end': event_end / self.flow_sr
+                        'severity': 'severe' if duration > 30 else 'moderate'
                     })
         
         # Handle case where recording ends during an event
@@ -244,24 +218,25 @@ class ChunkedAHIAnalyzer:
                     'start_time': absolute_start_time,
                     'end_time': absolute_end_time,
                     'duration': duration,
-                    'severity': 'severe' if duration > 30 else 'moderate',
-                    'chunk_relative_start': event_start / self.flow_sr,
-                    'chunk_relative_end': event_end / self.flow_sr
+                    'severity': 'severe' if duration > 30 else 'moderate'
                 })
         
+        print(f"[CHUNKED-AHI] Detected {len(events)} apnea events in chunk", file=sys.stderr)
         return events
     
     def _detect_hypopnea_in_chunk(self, flow_chunk: np.ndarray, spo2_chunk: np.ndarray,
                                  chunk_start_time: float, chunk_end_time: float,
                                  global_baseline: float) -> List[Dict]:
-        """Detect hypopnea events in a chunk."""
+        """
+        Detect hypopnea events in a chunk using EXACT SAME logic as ahi_analysis.py.
+        """
         if len(spo2_chunk) == 0:
             return []
         
         min_threshold = global_baseline * self.hypopnea_min_threshold
         max_threshold = global_baseline * self.hypopnea_max_threshold
         
-        # Smooth signals
+        # EXACT SAME smoothing logic as ahi_analysis.py
         flow_filter_size = max(1, int(self.flow_sr * 2))
         if flow_filter_size >= len(flow_chunk):
             flow_filter_size = max(1, len(flow_chunk) // 4)
@@ -269,14 +244,16 @@ class ChunkedAHIAnalyzer:
         spo2_filter_size = max(1, int(self.spo2_sr * 3))
         if spo2_filter_size >= len(spo2_chunk):
             spo2_filter_size = max(1, len(spo2_chunk) // 4)
+            
+        print(f"[CHUNKED-AHI] Using filter sizes - Flow: {flow_filter_size}, SpO2: {spo2_filter_size}", file=sys.stderr)
         
         flow_smooth = uniform_filter1d(np.abs(flow_chunk), size=flow_filter_size)
         spo2_smooth = uniform_filter1d(spo2_chunk, size=spo2_filter_size)
         
-        # Find flow reduction regions
+        # Find flow reduction regions (between 30-70% of baseline)
         flow_reduced = (flow_smooth >= min_threshold) & (flow_smooth <= max_threshold)
         
-        # Find continuous flow reduction regions
+        # EXACT SAME event detection logic as ahi_analysis.py
         potential_events = []
         in_event = False
         event_start = 0
@@ -299,9 +276,7 @@ class ChunkedAHIAnalyzer:
                         'end_sample': event_end,
                         'start_time': absolute_start_time,
                         'end_time': absolute_end_time,
-                        'duration': duration,
-                        'chunk_relative_start': event_start / self.flow_sr,
-                        'chunk_relative_end': event_end / self.flow_sr
+                        'duration': duration
                     })
         
         # Handle case where recording ends during an event
@@ -317,33 +292,33 @@ class ChunkedAHIAnalyzer:
                     'end_sample': event_end,
                     'start_time': absolute_start_time,
                     'end_time': absolute_end_time,
-                    'duration': duration,
-                    'chunk_relative_start': event_start / self.flow_sr,
-                    'chunk_relative_end': event_end / self.flow_sr
+                    'duration': duration
                 })
         
-        # Check for corresponding SpO2 drops
+        # EXACT SAME SpO2 drop detection logic as ahi_analysis.py
         hypopnea_events = []
         
         for event in potential_events:
-            # Convert flow time to SpO2 samples within this chunk
-            spo2_event_start = int(event['chunk_relative_start'] * self.spo2_sr)
-            spo2_event_end = int(event['chunk_relative_end'] * self.spo2_sr)
+            # Convert flow time to SpO2 samples
+            flow_relative_start = event['start_time'] - chunk_start_time
+            flow_relative_end = event['end_time'] - chunk_start_time
+            spo2_start = int(flow_relative_start * self.spo2_sr)
+            spo2_end = int(flow_relative_end * self.spo2_sr)
             
             # Ensure we don't go out of bounds
-            spo2_event_start = max(0, spo2_event_start)
-            spo2_event_end = min(len(spo2_smooth), spo2_event_end)
+            spo2_start = max(0, spo2_start)
+            spo2_end = min(len(spo2_smooth), spo2_end)
             
-            if spo2_event_end <= spo2_event_start:
+            if spo2_end <= spo2_start:
                 continue
             
             # Look for SpO2 drop during the event (with some margin)
-            pre_event_start = max(0, spo2_event_start - int(30 * self.spo2_sr))  # 30s before
-            baseline_spo2 = np.median(spo2_smooth[pre_event_start:spo2_event_start])
+            pre_event_start = max(0, spo2_start - int(30 * self.spo2_sr))  # 30s before
+            baseline_spo2 = np.median(spo2_smooth[pre_event_start:spo2_start])
             
             # Find minimum SpO2 during event and shortly after
-            post_event_end = min(len(spo2_smooth), spo2_event_end + int(30 * self.spo2_sr))  # 30s after
-            min_spo2 = np.min(spo2_smooth[spo2_event_start:post_event_end])
+            post_event_end = min(len(spo2_smooth), spo2_end + int(30 * self.spo2_sr))  # 30s after
+            min_spo2 = np.min(spo2_smooth[spo2_start:post_event_end])
             
             spo2_drop = baseline_spo2 - min_spo2
             
@@ -359,11 +334,10 @@ class ChunkedAHIAnalyzer:
                     'spo2_drop': spo2_drop,
                     'baseline_spo2': baseline_spo2,
                     'min_spo2': min_spo2,
-                    'severity': 'severe' if spo2_drop > 6 else 'moderate',
-                    'chunk_relative_start': event['chunk_relative_start'],
-                    'chunk_relative_end': event['chunk_relative_end']
+                    'severity': 'severe' if spo2_drop > 6 else 'moderate'
                 })
         
+        print(f"[CHUNKED-AHI] Detected {len(hypopnea_events)} hypopnea events from {len(potential_events)} flow reductions in chunk", file=sys.stderr)
         return hypopnea_events
     
     def _remove_duplicate_events(self, all_events: List[Dict]) -> List[Dict]:
@@ -407,76 +381,14 @@ class ChunkedAHIAnalyzer:
         
         return unique_events
     
-    def analyze(self) -> Dict:
-        """
-        Perform complete chunk-based AHI analysis.
-        
-        Returns:
-            Complete analysis results including events and statistics
-        """
-        print("[CHUNKED-AHI] Starting chunk-based AHI analysis...", file=sys.stderr)
-        
-        # Calculate global baseline
-        global_baseline = self._calculate_global_baseline()
-        
-        # Process each chunk
-        all_apnea_events = []
-        all_hypopnea_events = []
-        
-        for chunk_idx in range(self.num_chunks):
-            print(f"[CHUNKED-AHI] Processing chunk {chunk_idx + 1}/{self.num_chunks}...", file=sys.stderr)
-            
-            # Get chunk data
-            flow_chunk, spo2_chunk, chunk_start_time, chunk_end_time = self._get_chunk_data(chunk_idx)
-            
-            # Detect events in this chunk
-            apnea_events, hypopnea_events = self._detect_events_in_chunk(
-                flow_chunk, spo2_chunk, chunk_start_time, chunk_end_time, global_baseline
-            )
-            
-            all_apnea_events.extend(apnea_events)
-            all_hypopnea_events.extend(hypopnea_events)
-            
-            print(f"[CHUNKED-AHI] Chunk {chunk_idx + 1}: {len(apnea_events)} apneas, {len(hypopnea_events)} hypopneas", file=sys.stderr)
-        
-        # Remove duplicate events from overlapping chunks
-        print("[CHUNKED-AHI] Removing duplicate events from overlapping chunks...", file=sys.stderr)
-        all_apnea_events = self._remove_duplicate_events(all_apnea_events)
-        all_hypopnea_events = self._remove_duplicate_events(all_hypopnea_events)
-        
-        print(f"[CHUNKED-AHI] After deduplication: {len(all_apnea_events)} apneas, {len(all_hypopnea_events)} hypopneas", file=sys.stderr)
-        
-        # Calculate AHI
-        ahi_results = self._calculate_ahi(all_apnea_events, all_hypopnea_events)
-        
-        # Combine all results
-        results = {
-            'ahi_analysis': ahi_results,
-            'apnea_events': all_apnea_events,
-            'hypopnea_events': all_hypopnea_events,
-            'all_events': sorted(all_apnea_events + all_hypopnea_events, key=lambda x: x['start_time']),
-            'analysis_parameters': {
-                'chunk_duration_minutes': self.chunk_duration_minutes,
-                'overlap_minutes': self.overlap_minutes,
-                'num_chunks': self.num_chunks,
-                'apnea_threshold': self.apnea_threshold,
-                'hypopnea_min_threshold': self.hypopnea_min_threshold,
-                'hypopnea_max_threshold': self.hypopnea_max_threshold,
-                'spo2_drop_threshold': self.spo2_drop_threshold,
-                'min_event_duration': self.min_event_duration,
-                'global_baseline': global_baseline
-            }
-        }
-        
-        print(f"[CHUNKED-AHI] Analysis completed successfully", file=sys.stderr)
-        return results
-    
     def _calculate_ahi(self, apnea_events: List[Dict], hypopnea_events: List[Dict]) -> Dict:
-        """Calculate AHI score and classify severity."""
+        """
+        Calculate AHI score using EXACT SAME logic as ahi_analysis.py.
+        """
         total_events = len(apnea_events) + len(hypopnea_events)
         ahi_score = total_events / self.recording_duration_hours if self.recording_duration_hours > 0 else 0
         
-        # Classify severity according to clinical standards
+        # EXACT SAME severity classification as ahi_analysis.py
         if ahi_score < 5:
             severity = "Normal"
             severity_color = "green"
@@ -490,7 +402,7 @@ class ChunkedAHIAnalyzer:
             severity = "Severe"
             severity_color = "red"
         
-        # Calculate additional statistics
+        # EXACT SAME statistics calculation as ahi_analysis.py
         total_apnea_duration = sum(event['duration'] for event in apnea_events)
         total_hypopnea_duration = sum(event['duration'] for event in hypopnea_events)
         total_event_duration = total_apnea_duration + total_hypopnea_duration
@@ -520,31 +432,155 @@ class ChunkedAHIAnalyzer:
         print(f"[CHUNKED-AHI] Events: {len(apnea_events)} apneas, {len(hypopnea_events)} hypopneas", file=sys.stderr)
         
         return result
+    
+    def analyze(self) -> Dict:
+        """
+        Perform complete chunk-based AHI analysis using the proven ahi_analysis.py logic.
+        
+        Returns:
+            Complete analysis results including events and statistics
+        """
+        print("[CHUNKED-AHI] Starting chunk-based AHI analysis using proven ahi_analysis.py logic...", file=sys.stderr)
+        
+        # Calculate global baseline using the exact same method as ahi_analysis.py
+        global_baseline = self._calculate_global_baseline()
+        
+        # Process each chunk
+        all_apnea_events = []
+        all_hypopnea_events = []
+        
+        for chunk_idx in range(self.num_chunks):
+            print(f"[CHUNKED-AHI] Processing chunk {chunk_idx + 1}/{self.num_chunks}...", file=sys.stderr)
+            
+            # Get chunk data
+            flow_chunk, spo2_chunk, chunk_start_time, chunk_end_time = self._get_chunk_data(chunk_idx)
+            
+            # Detect events in this chunk using the exact same logic as ahi_analysis.py
+            apnea_events = self._detect_apnea_in_chunk(flow_chunk, chunk_start_time, global_baseline)
+            hypopnea_events = self._detect_hypopnea_in_chunk(
+                flow_chunk, spo2_chunk, chunk_start_time, chunk_end_time, global_baseline
+            )
+            
+            all_apnea_events.extend(apnea_events)
+            all_hypopnea_events.extend(hypopnea_events)
+            
+            print(f"[CHUNKED-AHI] Chunk {chunk_idx + 1}: {len(apnea_events)} apneas, {len(hypopnea_events)} hypopneas", file=sys.stderr)
+        
+        # Remove duplicate events from overlapping chunks
+        print("[CHUNKED-AHI] Removing duplicate events from overlapping chunks...", file=sys.stderr)
+        all_apnea_events = self._remove_duplicate_events(all_apnea_events)
+        all_hypopnea_events = self._remove_duplicate_events(all_hypopnea_events)
+        
+        print(f"[CHUNKED-AHI] After deduplication: {len(all_apnea_events)} apneas, {len(all_hypopnea_events)} hypopneas", file=sys.stderr)
+        
+        # Calculate AHI using the exact same logic as ahi_analysis.py
+        ahi_results = self._calculate_ahi(all_apnea_events, all_hypopnea_events)
+        
+        # Combine all results in the exact same format as ahi_analysis.py
+        results = {
+            'ahi_analysis': ahi_results,
+            'apnea_events': all_apnea_events,
+            'hypopnea_events': all_hypopnea_events,
+            'all_events': sorted(all_apnea_events + all_hypopnea_events, key=lambda x: x['start_time']),
+            'analysis_parameters': {
+                'chunk_duration_minutes': self.chunk_duration_minutes,
+                'overlap_minutes': self.overlap_minutes,
+                'num_chunks': self.num_chunks,
+                'apnea_threshold': self.apnea_threshold,
+                'hypopnea_min_threshold': self.hypopnea_min_threshold,
+                'hypopnea_max_threshold': self.hypopnea_max_threshold,
+                'spo2_drop_threshold': self.spo2_drop_threshold,
+                'min_event_duration': self.min_event_duration,
+                'global_baseline': global_baseline
+            }
+        }
+        
+        print(f"[CHUNKED-AHI] Analysis completed successfully using proven ahi_analysis.py logic", file=sys.stderr)
+        return results
+
+
+def load_edf_data(file_path: str, flow_channel: str, spo2_channel: str):
+    """
+    Load EDF data using pyedflib directly for memory efficiency.
+    This avoids the Node.js memory bottleneck.
+    """
+    import pyedflib
+    
+    try:
+        print(f"[CHUNKED-AHI] Loading EDF data from: {file_path}", file=sys.stderr)
+        
+        # Open EDF file
+        f = pyedflib.EdfReader(file_path)
+        
+        # Get signal labels and find channel indices
+        signal_labels = f.getSignalLabels()
+        flow_channel_index = signal_labels.index(flow_channel)
+        spo2_channel_index = signal_labels.index(spo2_channel)
+        
+        # Get sample rates and duration
+        flow_sample_rate = f.getSampleFrequency(flow_channel_index)
+        spo2_sample_rate = f.getSampleFrequency(spo2_channel_index)
+        duration = f.file_duration
+        
+        print(f"[CHUNKED-AHI] File info - Flow: {flow_sample_rate}Hz, SpO2: {spo2_sample_rate}Hz, Duration: {duration}s", file=sys.stderr)
+        
+        # Read all data for both channels
+        print("[CHUNKED-AHI] Reading flow data...", file=sys.stderr)
+        flow_data = f.readSignal(flow_channel_index)
+        
+        print("[CHUNKED-AHI] Reading SpO2 data...", file=sys.stderr)
+        spo2_data = f.readSignal(spo2_channel_index)
+        
+        f.close()
+        
+        print(f"[CHUNKED-AHI] Data loaded - Flow: {len(flow_data)} samples, SpO2: {len(spo2_data)} samples", file=sys.stderr)
+        
+        return flow_data, spo2_data, flow_sample_rate, spo2_sample_rate
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to load EDF data: {str(e)}", file=sys.stderr)
+        raise
 
 
 def main():
     """Main function for command-line usage."""
     if len(sys.argv) != 2:
-        print("Usage: python ahi_analysis_chunked.py '<json_file_path>'", file=sys.stderr)
+        print("Usage: python ahi_analysis_chunked.py '<json_file_path>' or python ahi_analysis_chunked.py -", file=sys.stderr)
         sys.exit(1)
     
     try:
-        # Read input JSON from file (avoids PowerShell escaping issues)
-        json_file_path = sys.argv[1]
-        with open(json_file_path, 'r') as f:
-            input_data = json.load(f)
+        # Read input JSON from file or stdin
+        json_input = sys.argv[1]
+        if json_input == '-':
+            # Read from stdin
+            input_data = json.load(sys.stdin)
+        else:
+            # Read from file (avoids PowerShell escaping issues)
+            with open(json_input, 'r') as f:
+                input_data = json.load(f)
         
-        # Extract required data
-        flow_data = input_data['flow_data']
-        spo2_data = input_data['spo2_data']
-        flow_sample_rate = input_data['flow_sample_rate']
-        spo2_sample_rate = input_data['spo2_sample_rate']
+        # Check if we have file path and channel names (new method) or raw data (old method)
+        if 'file_path' in input_data and 'flow_channel' in input_data and 'spo2_channel' in input_data:
+            # New method: load data from EDF file directly
+            file_path = input_data['file_path']
+            flow_channel = input_data['flow_channel']
+            spo2_channel = input_data['spo2_channel']
+            
+            # Load data from EDF file
+            flow_data, spo2_data, flow_sample_rate, spo2_sample_rate = load_edf_data(file_path, flow_channel, spo2_channel)
+            
+        else:
+            # Old method: use provided data (for backward compatibility)
+            flow_data = input_data['flow_data']
+            spo2_data = input_data['spo2_data']
+            flow_sample_rate = input_data['flow_sample_rate']
+            spo2_sample_rate = input_data['spo2_sample_rate']
         
         # Optional parameters for chunking
-        chunk_duration_minutes = input_data.get('chunk_duration_minutes', 60)
-        overlap_minutes = input_data.get('overlap_minutes', 5)
+        chunk_duration_minutes = input_data.get('chunk_duration_minutes', 30)
+        overlap_minutes = input_data.get('overlap_minutes', 2)
         
-        # Create analyzer and run analysis
+        # Create analyzer and run analysis using the proven ahi_analysis.py logic
         analyzer = ChunkedAHIAnalyzer(
             flow_data, spo2_data, flow_sample_rate, spo2_sample_rate,
             chunk_duration_minutes, overlap_minutes
