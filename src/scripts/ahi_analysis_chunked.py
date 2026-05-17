@@ -53,7 +53,7 @@ class ChunkedAHIAnalyzer:
         self.chunk_duration_minutes = chunk_duration_minutes
         self.overlap_minutes = overlap_minutes
         
-        # EXACT SAME Clinical parameters as ahi_analysis.py
+       
         self.apnea_threshold = 0.1  # 10% of baseline (90% reduction)
         self.hypopnea_min_threshold = 0.3  # 30% of baseline (70% reduction)
         self.hypopnea_max_threshold = 0.7  # 70% of baseline (30% reduction)
@@ -549,19 +549,19 @@ def main():
         sys.exit(1)
     
     try:
-        # Read input JSON from file or stdin
+     
         json_input = sys.argv[1]
         if json_input == '-':
-            # Read from stdin
+            
             input_data = json.load(sys.stdin)
         else:
-            # Read from file (avoids PowerShell escaping issues)
+            
             with open(json_input, 'r') as f:
                 input_data = json.load(f)
         
-        # Check if we have file path and channel names (new method) or raw data (old method)
+        
         if 'file_path' in input_data and 'flow_channel' in input_data and 'spo2_channel' in input_data:
-            # New method: load data from EDF file directly
+
             file_path = input_data['file_path']
             flow_channel = input_data['flow_channel']
             spo2_channel = input_data['spo2_channel']

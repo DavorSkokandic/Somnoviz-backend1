@@ -332,7 +332,7 @@ def get_multi_channel_chunk(file_path, channels, start_sec, end_sec, max_points)
                     idx = np.floor(np.linspace(0, n - 1, desired_points)).astype(int)
                     ds = data[idx]
                 
-                # Calculate statistics on the FULL dataset (not downsampled) for accuracy
+                
                 stats = {
                     "mean": float(np.mean(data)),
                     "median": float(np.median(data)),
@@ -467,7 +467,7 @@ elif command == "full-stats":
 elif command == "max-min":
     try:
         file_path = sys.argv[2]
-        channel_list = json.loads(sys.argv[3])  # expects '["Ch1", "Ch2"]'
+        channel_list = json.loads(sys.argv[3])  
         start_sec = float(sys.argv[4]) if len(sys.argv) > 4 else 0
         end_sec = float(sys.argv[5]) if len(sys.argv) > 5 else None
         

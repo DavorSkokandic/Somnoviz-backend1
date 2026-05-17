@@ -485,7 +485,7 @@ export const handleAHIAnalysis = async (req: Request, res: Response) => {
   }
 };
 
-// Full data AHI analysis using the chunked Python script for medical accuracy
+// Full data AHI analysis using the chunked Python script for accuracy
 async function runFullDataAHIAnalysis(ahiScriptPath: string, filePath: string, flowChannel: string, spo2Channel: string): Promise<any> {
   return new Promise(async (resolve, reject) => {
     try {
@@ -691,7 +691,7 @@ async function getFullChannelDataForAHI(scriptPath: string, filePath: string, ch
   });
 }
 
-// Efficient helper function to get channel statistics (not full data)
+// Helper function to get channel statistics (not full data)
 async function getChannelStatistics(scriptPath: string, filePath: string, channels: string[]): Promise<any> {
   return new Promise((resolve, reject) => {
     const pythonCommand = process.env.NODE_ENV === 'production' ? 'python3' : 'python';
